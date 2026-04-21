@@ -1,0 +1,65 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: kraftdo_mysql_dev
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS}
+      MYSQL_DATABASE: ${DB_NAME:-kraftdo}
+      MYSQL_USER: ${DB_USER:-kraftdo}
+      MYSQL_PASSWORD: ${DB_PASS}
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_dev_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: kraftdo_redis_dev
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: kraftdo_api_dev
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      - DB_HOST=mysql
+      - DB_NAME=${DB_NAME:-kraftdo}
+      - DB_USER=${DB_USER:-kraftdo}
+      - DB_PASS=${DB_PASS}
+      - REDIS_URL=redis://redis:6379
+      - API_KEY=${API_KEY}
+      - SECRET_KEY=${SECRET_KEY}
+      - UPLOAD_TOKEN=${UPLOAD_TOKEN}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - APP_ENV=development
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  mysql_dev_data:
+
+networks:
+  default:
+    name: kraftdo_dev_network
