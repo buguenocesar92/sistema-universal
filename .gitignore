@@ -1,34 +1,84 @@
-# Credenciales y secretos
+# KraftDo Sistema — .gitignore
+
+# ── Secretos y configuración ────────────────────────────────────────────────
 .env
 *.env
 creds.json
-*credentials*.json
-*service_account*.json
-*.pem
-*.key
+*_credentials.json
+service_account*.json
 
-# Datos reales de clientes — NUNCA subir
-*.xlsx
-*.xls
-empresas/*/data/
-storage/uploads/
-storage/exports/
-logs/
-*.log
-
-# Python
+# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
-venv/
-.venv/
+*.py[cod]
+*$py.class
 *.pyc
-*.pyo
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
 
-# Node
+# ── Node ─────────────────────────────────────────────────────────────────────
 node_modules/
+npm-debug.log*
 
-# Docker volumes
-docker/volumes/
+# ── Laravel generado (no subir output — se genera con generator.py) ──────────
+laravel_output*/
+laravel_v*/
+sistema_*/
+mi-sistema*/
 
-# OS
+# ── n8n generado ─────────────────────────────────────────────────────────────
+n8n_workflows/
+n8n_final/
+n8n_v*/
+
+# ── Diff y migraciones generadas ─────────────────────────────────────────────
+diff_migrations/
+consolidado/
+
+# ── Historial (snapshots locales, no compartir) ───────────────────────────────
+historial/
+
+# ── Temporales de uploads ────────────────────────────────────────────────────
+/tmp/
+uploads_temp/
+
+# ── Excel de clientes (datos sensibles) ──────────────────────────────────────
+# Descomentar si el Excel tiene datos reales de clientes
+# *.xlsx
+# *.xlsm
+# *.xls
+
+# ── IDEs ─────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
 .DS_Store
 Thumbs.db
+
+# ── Docker ───────────────────────────────────────────────────────────────────
+# Los volúmenes Docker son locales, no van al repo
+mysql_data/
+redis_data/
+minio_data/
+
+# ── Logs ────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── ZIP de distribución (se regeneran) ───────────────────────────────────────
+*.zip
+
+# ── Test coverage ────────────────────────────────────────────────────────────
+.coverage
+htmlcov/
+coverage.xml
+empresas/KraftDo_BD_Maestra_v5.xlsx
+.env
+empresas/*.xlsx
+empresas/*.xls

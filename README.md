@@ -1,86 +1,88 @@
 # KraftDo Sistema Universal v18
 
-Convierte cualquier Excel de PYME en un sistema web completo con panel admin,
-API REST, automaciones y backups. Sin reemplazar el Excel del cliente — entendiendolo.
+Plataforma que convierte cualquier Excel en un sistema web operativo.
 
-## El problema que resuelve
+## Resumen rapido
 
-Toda PYME tiene su sistema en Excel. Lleno de formulas y colores que documentan
-años de logica de negocio. Este sistema lo lee, lo entiende, y genera todo lo demas.
-
-    Excel del cliente
-          |
-    config.py (mapeo de columnas)
-          |
-    Sistema Universal v18
-          |
-    ┌─────┴──────┬──────────┬──────────┐
-    API REST   Admin     PWA       Automaciones
-    FastAPI    Filament  HTML/JS   Prefect + cron
-
-## Que genera automaticamente
-
-- Panel de administracion (Laravel + Filament 4)
-- API REST documentada (Python + FastAPI)
-- Formularios dinamicos para captura de datos
-- Reportes PDF automaticos por email
-- Backups versionados (MinIO)
-- Scheduler de tareas (Prefect)
-- Bot de Telegram/WhatsApp (opcional)
-
-## Stack
-
-    Python 3.12     FastAPI, Pandas, DuckDB, Pydantic v2
-    Laravel 11      Filament 4, MySQL, Redis
-    Docker          24 servicios en docker-compose
-    Prefect         Scheduler de automaciones
-    MinIO           Backups versionados
-    n8n             Integraciones visuales
+- **3 empresas configuradas**: Constructora Adille, Extractores Chile, KraftDo SpA
+- **24 servicios Docker**: Laravel+Filament, API Python, Classifier AI, Portal, Worker, n8n, MySQL, Redis, Meilisearch, MinIO, Grafana+Prometheus, Uptime Kuma, Reverb (WebSockets), Nginx+Cloudflare
+- **142 tests pasando** (Python pytest + Playwright E2E)
+- **16 modulos en jobs/**: queue, cache, backup, audit, auth, JWT, 2FA, crypto, rate limit, vault, sentry, i18n, notifications, search, drive export, MJML
 
 ## Instalacion
 
-    git clone https://github.com/buguenocesar92/sistema-universal.git
-    cd sistema-universal/sistema_v18_patched
-    cp .env.example .env
-    # Editar .env con tus valores
-    docker compose up -d
+```bash
+# 1. Descomprimir
+unzip KraftDo_Sistema_v18_completo.zip -d /opt/
+cd /opt/sistema_v18_patched
 
-## Configurar una empresa nueva
+# 2. Generar secrets automaticamente
+./setup.sh
 
-Crear empresas/mi_empresa/config.py:
+# 3. Editar .env con SMTP, EMAIL_ADILLE, EMAIL_EXTRACTORES, etc
+nano .env
 
-    EMPRESA = {
-        "nombre": "Mi Empresa SpA",
-        "archivo_excel": "datos.xlsx",
-        "hojas": {
-            "productos": {"fila_inicio": 7, "columnas": {...}},
-            "pedidos":   {"fila_inicio": 2, "columnas": {...}},
-        }
-    }
+# 4. Levantar Docker
+docker compose up -d --build
 
-El sistema genera migraciones, modelos, recursos Filament y endpoints API
-automaticamente desde ese archivo.
+# 5. SSL con certbot (primera vez)
+docker compose run certbot certonly --webroot -w /var/www/certbot \
+  -d kraftdo.cl -d api.kraftdo.cl -d app.kraftdo.cl \
+  -d sistema.kraftdo.cl -d n8n.kraftdo.cl \
+  -d status.kraftdo.cl -d grafana.kraftdo.cl -d ws.kraftdo.cl
+```
 
-## Empresas incluidas como ejemplo
+## URLs del sistema
 
-| Empresa | Descripcion |
-|---------|-------------|
-| kraftdo_bd | Productos, pedidos y caja de KraftDo SpA |
-| adille | Control de obras de Constructora Adille |
-| extractores | Catalogo de Extractores Chile |
-
-## Tests
-
-    cd sistema_v18_patched
-    python3 -m pytest tests/ -v
-    # 92/92 tests pasando
+| URL | Servicio |
+|-----|----------|
+| kraftdo.cl/admin | Panel Laravel + Filament |
+| api.kraftdo.cl | API REST Python |
+| app.kraftdo.cl | Classifier (mapear Excel nuevos) |
+| sistema.kraftdo.cl | Portal de upload (Jonathan) |
+| n8n.kraftdo.cl | Automatizaciones |
+| status.kraftdo.cl | Uptime Kuma |
+| grafana.kraftdo.cl | Dashboards de metricas |
+| ws.kraftdo.cl | WebSockets (Reverb) |
 
 ## Documentacion
 
-- KraftDo_Manual_Usuario.pdf — guia paso a paso para el usuario final
-- KraftDo_Documentacion_Tecnica.pdf — referencia tecnica completa (20 secciones)
+- `KraftDo_Manual_Usuario.pdf` - Como usar el sistema
+- `KraftDo_Documentacion_Tecnica.pdf` - Arquitectura interna
+- `docs/cloudflare_setup.md` - Configurar CDN
+- `docs/uptime_kuma_setup.md` - Configurar alertas
+
+## Estructura
+
+```
+sistema_v18_patched/
+├── core.py, api.py, classifier.py, generator.py
+├── onboarding.py, upload_portal.py
+├── jobs/              (16 modulos de Sesion 1-4)
+├── workers/
+├── tests/             (142 tests)
+├── docker/
+├── laravel_multitenant/
+├── empresas/
+├── lang/              (es.json, en.json)
+├── templates/email/   (MJML)
+├── storage/pwa/       (manifest, service worker, tour)
+└── .github/workflows/ (CI/CD)
+```
+
+## Testing
+
+```bash
+# Tests unitarios Python
+python3 -m pytest tests/ -v
+
+# Tests E2E (requiere npm install)
+npx playwright test
+```
+
+## Licencia
+
+Proprietary - KraftDo SpA
 
 ---
-
-Parte del ecosistema KraftDo SpA — digitalizamos PYMEs chilenas.
-https://kraftdo.cl
+Contacto: hola@kraftdo.cl

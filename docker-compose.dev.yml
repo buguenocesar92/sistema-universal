@@ -40,6 +40,7 @@ services:
       - "8000:8000"
     volumes:
       - .:/app
+      - ~/Documentos/kraftdo-privado:/app/data
     environment:
       - DB_HOST=mysql
       - DB_NAME=${DB_NAME:-kraftdo}
