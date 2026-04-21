@@ -64,3 +64,4 @@ volumes:
 networks:
   default:
     name: kraftdo_dev_network
+    external: false
