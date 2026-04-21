@@ -1,0 +1,53 @@
+# ─── Web framework ─────────────────────────────────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+pydantic==2.10.1
+
+# ─── Excel / Sheets ────────────────────────────────────────────────────────────
+openpyxl==3.1.5
+pandas==2.2.2
+xlrd==2.0.1
+gspread==6.1.2
+google-auth==2.29.0
+
+# ─── Base de datos ─────────────────────────────────────────────────────────────
+sqlalchemy==2.0.35
+pymysql==1.1.1
+duckdb==1.0.0
+
+# ─── Cache / Queue ─────────────────────────────────────────────────────────────
+redis==5.0.8
+
+# ─── PDF ───────────────────────────────────────────────────────────────────────
+reportlab==4.2.2
+
+# ─── IA (Classifier) ───────────────────────────────────────────────────────────
+anthropic==0.34.0
+instructor==1.4.3
+
+# ─── SQL parsing (differ.py) ───────────────────────────────────────────────────
+sqlglot==25.0.0
+
+# ─── Utilidades ────────────────────────────────────────────────────────────────
+python-dotenv==1.0.1
+jinja2==3.1.6
+httpx==0.27.2
+requests==2.32.3
+
+# ─── Orquestación (pipeline.py — opcional, no bloquea si falla) ───────────────
+# prefect==3.0.0   # descomentar si se usa pipeline.py
+# minio==7.2.7     # descomentar si se usa almacenamiento MinIO
+sentry-sdk[fastapi]==2.14.0
+
+# Búsqueda full-text
+meilisearch==0.31.4
+
+# Seguridad: JWT + 2FA
+PyJWT==2.9.0
+pyotp==2.9.0
+cryptography==43.0.1
+
+# Google Drive backup
+google-api-python-client==2.143.0
+google-auth-httplib2==0.2.0

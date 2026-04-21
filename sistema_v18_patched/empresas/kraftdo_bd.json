@@ -1,0 +1,145 @@
+{
+  "empresa": {
+    "nombre": "KraftDo SpA",
+    "rut": "",
+    "email": "hola@kraftdo.cl",
+    "color_primary": "1A1A2E",
+    "color_accent": "E94560"
+  },
+  "fuente": {
+    "tipo": "local",
+    "archivo": "empresas/KraftDo_BD_v4.xlsx",
+    "sheets_id": "1DCOGoP6qkKAqRQRCGHkt4n5XHrymPLSS8DayByWqhzE"
+  },
+  "logica_negocios": {
+    "iva": 0.19,
+    "moneda": "CLP"
+  },
+  "hojas": {
+    "productos": {
+      "nombre": "Productos",
+      "tipo": "catalogo",
+      "fila_datos": 7,
+      "columnas": {
+        "sku": "A",
+        "categoria": "B",
+        "nombre": "C",
+        "variante": "D",
+        "costo_insumo": "E",
+        "costo_prod": "F",
+        "costo_total": "G",
+        "margen": "H",
+        "precio_unit": "I",
+        "precio_mayor": "J",
+        "stock": "K",
+        "dias_prod": "L"
+      },
+      "identificador": "sku",
+      "filtro_activo": {
+        "columna": "sku",
+        "valor": "A"
+      }
+    },
+    "proveedores": {
+      "nombre": "Proveedores",
+      "tipo": "registros",
+      "fila_datos": 6,
+      "columnas": {
+        "id": "A",
+        "nombre": "B",
+        "contacto": "C",
+        "tipo": "D",
+        "despacho": "E",
+        "minimo": "F",
+        "envio_gratis": "G",
+        "notas": "H",
+        "actualizado": "I"
+      },
+      "identificador": "id"
+    },
+    "insumos": {
+      "nombre": "Insumos",
+      "tipo": "registros",
+      "fila_datos": 6,
+      "columnas": {
+        "id": "A",
+        "nombre": "B",
+        "unidad": "C",
+        "stock": "D",
+        "stock_min": "E",
+        "alerta": "F",
+        "costo": "G",
+        "proveedor": "H",
+        "actualizado": "I",
+        "notas": "J"
+      },
+      "identificador": "id"
+    },
+    "clientes": {
+      "nombre": "Clientes",
+      "tipo": "registros",
+      "fila_datos": 6,
+      "columnas": {
+        "id": "A",
+        "nombre": "B",
+        "tipo": "C",
+        "whatsapp": "D",
+        "ciudad": "E",
+        "correo": "F",
+        "rubro": "G",
+        "canal": "H",
+        "fecha": "I",
+        "notas": "J"
+      },
+      "identificador": "id"
+    },
+    "pedidos": {
+      "nombre": "Pedidos",
+      "tipo": "registros",
+      "fila_datos": 6,
+      "columnas": {
+        "id_pedido": "A",
+        "fecha": "B",
+        "id_cliente": "C",
+        "cliente": "D",
+        "sku": "E",
+        "producto": "F",
+        "cantidad": "G",
+        "precio_unit": "H",
+        "costo_unit": "I",
+        "total": "J",
+        "ganancia": "K",
+        "margen": "L"
+      },
+      "identificador": "id_pedido"
+    },
+    "caja": {
+      "nombre": "Caja",
+      "tipo": "registros",
+      "fila_datos": 10,
+      "columnas": {
+        "numero": "A",
+        "fecha": "B",
+        "tipo": "C",
+        "subcategoria": "D",
+        "monto": "E",
+        "saldo": "F",
+        "id_pedido": "G",
+        "detalle": "H"
+      },
+      "identificador": "numero"
+    },
+    "kpis_caja": {
+      "nombre": "Caja",
+      "tipo": "kpis",
+      "kpis": {
+        "saldo_actual": "A5",
+        "total_ingresos": "B5",
+        "total_egresos": "C5",
+        "ventas_pedidos": "D5",
+        "gastos_fijos": "E5",
+        "gastos_insumos": "F5"
+      }
+    }
+  }
+}

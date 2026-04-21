@@ -1,0 +1,31 @@
+<mjml>
+<mj-body background-color="#f5f5f5">
+  <mj-section background-color="#E94560" padding="16px">
+    <mj-column>
+      <mj-text color="#ffffff" font-size="20px" font-weight="bold" align="center">
+        ⚠️ Alerta de stock bajo
+      </mj-text>
+    </mj-column>
+  </mj-section>
+
+  <mj-section background-color="#ffffff" padding="20px">
+    <mj-column>
+      <mj-text font-size="14px">
+        El producto <strong>{{sku}}</strong> tiene solo <strong>{{cantidad}} unidades</strong> en stock.
+      </mj-text>
+      <mj-text font-size="14px">
+        Stock mínimo configurado: {{minimo}}
+      </mj-text>
+      <mj-text font-size="14px">
+        Proveedor sugerido: {{proveedor}}
+      </mj-text>
+
+      <mj-divider border-color="#ddd" />
+
+      <mj-button href="{{url_reponer}}" background-color="#E94560" color="#ffffff">
+        Reponer ahora
+      </mj-button>
+    </mj-column>
+  </mj-section>
+</mj-body>
+</mjml>

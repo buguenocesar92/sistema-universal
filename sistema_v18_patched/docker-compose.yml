@@ -1,0 +1,393 @@
+version: "3.9"
+
+# KraftDo Sistema Universal — Stack completo
+# Levanta: Laravel multi-tenant + API Python + n8n + MySQL + Redis + Nginx
+#
+# USO:
+#   cp .env.example .env          → configurar variables
+#   docker compose up -d --build  → primera vez (construye imágenes)
+#   docker compose up -d          → arrancar sin reconstruir
+#   docker compose logs -f        → ver logs
+#   docker compose down           → apagar
+#
+# URLs:
+#   https://kraftdo.cl/admin      → Laravel Filament (3 empresas)
+#   https://api.kraftdo.cl        → API REST Python
+#   https://app.kraftdo.cl        → Classifier (mapear Excel nuevos)
+#   https://sistema.kraftdo.cl    → Portal upload Excel
+#   https://n8n.kraftdo.cl        → n8n automaciones
+
+services:
+
+  # ── Laravel multi-tenant (Filament) ────────────────────────────────────────
+  laravel:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.laravel
+    container_name: kraftdo_laravel
+    restart: unless-stopped
+    environment:
+      - APP_ENV=production
+      - APP_KEY=${APP_KEY}
+      - APP_URL=https://kraftdo.cl
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=${DB_NAME:-kraftdo}
+      - DB_USERNAME=${DB_USER:-kraftdo}
+      - DB_PASSWORD=${DB_PASS}
+      - CACHE_DRIVER=redis
+      - SESSION_DRIVER=redis
+      - REDIS_HOST=redis
+      - MAIL_MAILER=smtp
+      - MAIL_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - MAIL_PORT=${SMTP_PORT:-587}
+      - MAIL_USERNAME=${SMTP_USER}
+      - MAIL_PASSWORD=${SMTP_PASS}
+      - MAIL_FROM_ADDRESS=${SMTP_USER}
+      - MAIL_FROM_NAME="KraftDo"
+    volumes:
+      - laravel_storage:/var/www/html/storage
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - kraftdo
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/admin"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── API Python (core + cotizador + endpoints) ───────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: kraftdo_api
+    restart: unless-stopped
+    environment:
+      - API_KEY=${API_KEY}
+      - SECRET_KEY=${SECRET_KEY}
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=${DB_NAME:-kraftdo}
+      - DB_USER=${DB_USER:-kraftdo}
+      - DB_PASS=${DB_PASS}
+      - REDIS_URL=redis://redis:6379
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - EMAIL_ADILLE=${EMAIL_ADILLE:-hola@kraftdo.cl}
+      - EMAIL_EXTRACTORES=${EMAIL_EXTRACTORES:-hola@kraftdo.cl}
+      - UPLOAD_TOKEN=${UPLOAD_TOKEN}
+      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-60}
+    volumes:
+      - ./empresas:/app/empresas        # JSONs + Excel reales (editables sin rebuild)
+      - app_storage:/app/storage
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - kraftdo
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Classifier (mapear Excel nuevos) ───────────────────────────────────────
+  classifier:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: kraftdo_classifier
+    restart: unless-stopped
+    command: python3 classifier.py --host 0.0.0.0 --port 8001
+    environment:
+      - API_KEY=${API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - ./:/app
+      - ./empresas:/app/empresas
+    networks:
+      - kraftdo
+
+  # ── Upload Portal (Jonathan sube Excel) ────────────────────────────────────
+  portal:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: kraftdo_portal
+    restart: unless-stopped
+    command: python3 upload_portal.py
+    environment:
+      - UPLOAD_TOKEN=${UPLOAD_TOKEN}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - EMAIL_ADILLE=${EMAIL_ADILLE:-hola@kraftdo.cl}
+      - EMAIL_EXTRACTORES=${EMAIL_EXTRACTORES:-hola@kraftdo.cl}
+    volumes:
+      - ./:/app
+      - app_storage:/app/storage
+    networks:
+      - kraftdo
+
+
+  # ── Worker de jobs asíncronos (reportes, backups, etc) ─────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: kraftdo_worker
+    restart: unless-stopped
+    command: python3 workers/worker.py
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - EMAIL_ADILLE=${EMAIL_ADILLE:-hola@kraftdo.cl}
+      - EMAIL_EXTRACTORES=${EMAIL_EXTRACTORES:-hola@kraftdo.cl}
+      - EMAIL_CESAR=${EMAIL_CESAR:-hola@kraftdo.cl}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - APP_ENV=${APP_ENV:-production}
+    volumes:
+      - ./empresas:/app/empresas
+      - app_storage:/app/storage   # persistente: audit.db, auth.db, uploads, backups
+    depends_on:
+      redis:
+        condition: service_started
+    networks:
+      - kraftdo
+
+
+  # ── Prometheus (métricas del VPS) ──────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: kraftdo_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    networks:
+      - kraftdo
+
+  # ── Grafana (dashboards) ───────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: kraftdo_grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASS:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=https://grafana.kraftdo.cl
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - kraftdo
+
+  # ── Exporters ──────────────────────────────────────────────────────────────
+  node_exporter:
+    image: prom/node-exporter:latest
+    container_name: kraftdo_node_exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+    networks:
+      - kraftdo
+
+  mysql_exporter:
+    image: prom/mysqld-exporter:latest
+    container_name: kraftdo_mysql_exporter
+    restart: unless-stopped
+    environment:
+      - DATA_SOURCE_NAME=${DB_USER:-kraftdo}:${DB_PASS}@(mysql:3306)/
+    depends_on:
+      - mysql
+    networks:
+      - kraftdo
+
+  redis_exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: kraftdo_redis_exporter
+    restart: unless-stopped
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+    depends_on:
+      - redis
+    networks:
+      - kraftdo
+
+
+  # ── Meilisearch (búsqueda full-text instantánea) ───────────────────────────
+  meilisearch:
+    image: getmeili/meilisearch:v1.11
+    container_name: kraftdo_meilisearch
+    restart: unless-stopped
+    environment:
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY}
+      - MEILI_ENV=production
+      - MEILI_NO_ANALYTICS=true
+    volumes:
+      - meili_data:/meili_data
+    networks:
+      - kraftdo
+
+
+  # ── Laravel Reverb (WebSockets para tiempo real) ──────────────────────────
+  reverb:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.laravel
+    container_name: kraftdo_reverb
+    restart: unless-stopped
+    command: php artisan reverb:start --host=0.0.0.0 --port=8080
+    environment:
+      - APP_KEY=${APP_KEY}
+      - REVERB_APP_ID=${REVERB_APP_ID:-kraftdo}
+      - REVERB_APP_KEY=${REVERB_APP_KEY}
+      - REVERB_APP_SECRET=${REVERB_APP_SECRET}
+      - REVERB_HOST=0.0.0.0
+      - REVERB_PORT=8080
+      - REVERB_SCHEME=https
+    depends_on:
+      - laravel
+      - redis
+    networks:
+      - kraftdo
+
+  # ── MySQL ───────────────────────────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: kraftdo_mysql
+    restart: unless-stopped
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASS}
+      - MYSQL_DATABASE=${DB_NAME:-kraftdo}
+      - MYSQL_USER=${DB_USER:-kraftdo}
+      - MYSQL_PASSWORD=${DB_PASS}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - kraftdo
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASS}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: kraftdo_redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - kraftdo
+    command: redis-server --appendonly yes
+
+  # ── n8n (automaciones) ──────────────────────────────────────────────────────
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: kraftdo_n8n
+    restart: unless-stopped
+    environment:
+      - N8N_HOST=n8n.kraftdo.cl
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - WEBHOOK_URL=https://n8n.kraftdo.cl
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASS}
+      - N8N_ENCRYPTION_KEY=${N8N_KEY}
+      - DB_TYPE=mysqldb
+      - DB_MYSQLDB_HOST=mysql
+      - DB_MYSQLDB_DATABASE=n8n
+      - DB_MYSQLDB_USER=${DB_USER:-kraftdo}
+      - DB_MYSQLDB_PASSWORD=${DB_PASS}
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - kraftdo
+
+  # ── Nginx reverse proxy ─────────────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: kraftdo_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+      - certbot_data:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+    depends_on:
+      - laravel
+      - api
+      - classifier
+      - portal
+      - n8n
+    networks:
+      - kraftdo
+
+  # ── Certbot SSL ─────────────────────────────────────────────────────────────
+  certbot:
+    image: certbot/certbot
+    container_name: kraftdo_certbot
+    volumes:
+      - certbot_data:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done'"
+
+
+  # ── Uptime Kuma (monitoreo con alertas WhatsApp/email) ────────────────────
+  uptime_kuma:
+    image: louislam/uptime-kuma:1
+    container_name: kraftdo_uptime
+    restart: unless-stopped
+    volumes:
+      - uptime_kuma_data:/app/data
+    networks:
+      - kraftdo
+    # URL interna: http://uptime_kuma:3001
+    # URL pública: https://status.kraftdo.cl (ver nginx)
+
+volumes:
+  mysql_data:
+  uptime_kuma_data:
+  redis_data:
+  n8n_data:
+  laravel_storage:
+  certbot_data:
+  certbot_www:
+
+networks:
+  kraftdo:
+    driver: bridge

@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+venv/
+env/
+.venv/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Secretos
+.env
+creds.json
+*.pem
+*.key
+
+# Logs y temporales
+*.log
+tmp/
+temp/
+storage/uploads/*
+!storage/uploads/.gitkeep
+
+# Archivos de desarrollo
+tests/
+historial/
+*.md
+!README.md

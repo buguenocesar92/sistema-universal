@@ -1,0 +1,35 @@
+{
+  "app": {
+    "name": "KraftDo",
+    "tagline": "Universal System for SMEs"
+  },
+  "portal": {
+    "titulo": "Monthly reports upload portal",
+    "empresa": "Company",
+    "seleccionar": "— Select —",
+    "codigo_acceso": "Access code",
+    "codigo_placeholder": "Enter the code KraftDo gave you",
+    "archivo_excel": "Monthly Excel file",
+    "arrastra_aqui": "Drag the file here or click to select",
+    "archivo_restricciones": "Only .xlsx or .xls — max 10MB",
+    "subir_btn": "Upload and generate report",
+    "subiendo": "Uploading file and processing...",
+    "exito_titulo": "File received successfully",
+    "exito_detalle": "The report will be generated and sent by email in the next few minutes.",
+    "error_conexion": "Connection error. Try again."
+  },
+  "errores": {
+    "token_incorrecto": "Incorrect access code",
+    "empresa_desconocida": "Unknown company",
+    "extension_invalida": "Only .xlsx or .xls files accepted",
+    "tamano_excedido": "File exceeds the 10MB limit",
+    "contenido_invalido": "Content does not correspond to a valid Excel file"
+  },
+  "reportes": {
+    "generando": "Generating report...",
+    "enviado": "Report sent to",
+    "fecha": "Date",
+    "total": "TOTAL",
+    "sin_datos": "No records available"
+  }
+}

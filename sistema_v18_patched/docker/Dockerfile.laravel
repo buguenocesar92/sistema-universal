@@ -1,0 +1,29 @@
+# Usa la imagen base de KraftDo que ya está en el VPS
+# https://github.com/buguenocesar92/kraftdo-base
+FROM buguenocesar92/kraftdo-base:latest
+
+WORKDIR /var/www/html
+
+# Copiar el proyecto Laravel multi-tenant
+COPY laravel_multitenant/ .
+
+# Instalar dependencias PHP
+RUN composer install --no-dev --optimize-autoloader --no-interaction
+
+# Instalar dependencias JS y compilar assets
+RUN npm install && npm run build
+
+# Permisos
+RUN chown -R www-data:www-data storage bootstrap/cache \
+    && chmod -R 775 storage bootstrap/cache
+
+EXPOSE 80
+
+CMD ["sh", "-c", "\
+    php artisan config:cache && \
+    php artisan route:cache && \
+    php artisan view:cache && \
+    php artisan migrate --force && \
+    php artisan db:seed --force && \
+    php-fpm -D && \
+    nginx -g 'daemon off;'"]

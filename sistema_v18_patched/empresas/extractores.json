@@ -1,0 +1,141 @@
+{
+  "empresa": {
+    "nombre": "Extractores Chile Ltda",
+    "rut": "",
+    "email": "ventas@extractoreschile.cl",
+    "color_primary": "1A3A5C",
+    "color_accent": "E8A020"
+  },
+  "fuente": {
+    "tipo": "local",
+    "archivo": "empresas/Control_de_Extractores_Chile.xlsx",
+    "sheets_id": ""
+  },
+  "logica_negocios": {
+    "iva": 0.19,
+    "moneda": "CLP"
+  },
+  "hojas": {
+    "ventas": {
+      "nombre": "Control de Ventas",
+      "tipo": "registros",
+      "fila_datos": 11,
+      "columnas": {
+        "item": "B",
+        "contacto": "C",
+        "tipo_estructura": "D",
+        "empresa": "E",
+        "rut": "F",
+        "factura": "G",
+        "fecha": "H",
+        "modelo": "I",
+        "cantidad": "J",
+        "neto": "K",
+        "neto_dsto": "L",
+        "iva": "M"
+      },
+      "identificador": "item"
+    },
+    "stock": {
+      "nombre": "Control Stock",
+      "tipo": "registros",
+      "fila_datos": 5,
+      "columnas": {
+        "modelo": "B",
+        "importacion": "C",
+        "ventas": "D",
+        "promociones": "E",
+        "stock_disponible": "F"
+      },
+      "identificador": "modelo"
+    },
+    "promociones": {
+      "nombre": "Control de promociones",
+      "tipo": "registros",
+      "fila_datos": 4,
+      "columnas": {
+        "item": "A",
+        "contacto": "B",
+        "empresa": "C",
+        "rut": "D",
+        "modelo": "E",
+        "cantidad": "F",
+        "neto": "G",
+        "iva": "H",
+        "total": "I"
+      },
+      "identificador": "item"
+    },
+    "importaciones": {
+      "nombre": "Control Importacion",
+      "tipo": "registros",
+      "fila_datos": 4,
+      "columnas": {
+        "item": "A",
+        "modelo": "B",
+        "unidades": "C",
+        "pi_numero": "D",
+        "empresa": "E",
+        "rut": "F",
+        "factura": "G",
+        "costo_china": "H",
+        "embarcadero": "I",
+        "agente_aduana": "J",
+        "total_neto": "K",
+        "iva_servicio": "L"
+      },
+      "identificador": "item"
+    },
+    "productos": {
+      "nombre": "Producto",
+      "tipo": "catalogo",
+      "fila_datos": 2,
+      "columnas": {
+        "modelo": "A",
+        "sku": "B",
+        "precio": "C",
+        "panel": "D",
+        "flujo_aire": "E",
+        "cobertura": "F",
+        "motor": "G",
+        "garantia": "H",
+        "aplicaciones": "I"
+      },
+      "identificador": "modelo",
+      "precios": {
+        "1": "precio"
+      }
+    },
+    "ferias": {
+      "nombre": "Ferias 2026",
+      "tipo": "registros",
+      "fila_datos": 2,
+      "columnas": {
+        "evento": "A",
+        "fecha": "B",
+        "lugar": "C",
+        "region": "D",
+        "tipo": "E",
+        "relevancia": "F",
+        "publico": "G",
+        "costo_stand": "H",
+        "contacto": "I",
+        "estado": "J"
+      },
+      "identificador": "evento"
+    },
+    "resumen_stock": {
+      "nombre": "Control Stock",
+      "tipo": "kpis",
+      "kpis": {
+        "total_importado": "C8",
+        "total_vendidas": "D8",
+        "total_promociones": "E8",
+        "stock_disponible": "F8",
+        "stock_25w": "F5",
+        "stock_60w": "F6",
+        "stock_60w_e": "F7"
+      }
+    }
+  }
+}

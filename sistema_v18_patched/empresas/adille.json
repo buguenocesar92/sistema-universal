@@ -1,0 +1,163 @@
+{
+  "empresa": {
+    "nombre": "Constructora Adille",
+    "rut": "",
+    "email": "contacto@adille.cl",
+    "color_primary": "0D1B3E",
+    "color_accent": "C8A951"
+  },
+  "fuente": {
+    "tipo": "local",
+    "archivo": "empresas/Control_de_Obras_Marzo_2026.xlsx",
+    "sheets_id": ""
+  },
+  "logica_negocios": {
+    "iva": 0.19,
+    "moneda": "CLP"
+  },
+  "hojas": {
+    "panel_general": {
+      "nombre": "PANEL GENERAL",
+      "tipo": "resumen",
+      "secciones": {
+        "obras": {
+          "fila_inicio": 5,
+          "fila_fin": 8,
+          "columnas": {
+            "obra": "B",
+            "cobrado": "C",
+            "materiales": "D",
+            "mano_obra": "E",
+            "otros": "F",
+            "total_gastado": "G",
+            "resultado": "H",
+            "margen": "I"
+          }
+        },
+        "plazos": {
+          "fila_inicio": 12,
+          "fila_fin": 13,
+          "columnas": {
+            "obra": "B",
+            "inicio": "C",
+            "plazo": "D",
+            "dias_restantes": "E",
+            "estado": "F",
+            "avance": "G",
+            "responsable": "H",
+            "problema": "I"
+          }
+        },
+        "cuentas_cobrar": {
+          "fila_inicio": 17,
+          "fila_fin": 23,
+          "columnas": {
+            "factura": "B",
+            "proyecto": "C",
+            "monto_neto": "D",
+            "fecha": "E",
+            "dias_sin_cobrar": "F"
+          }
+        },
+        "flujo_caja": {
+          "fila_inicio": 30,
+          "fila_fin": 34,
+          "columnas": {
+            "concepto": "B",
+            "monto": "C"
+          }
+        }
+      }
+    },
+    "materiales": {
+      "nombre": "CONTROL DE MATERIALES",
+      "tipo": "registros",
+      "fila_datos": 5,
+      "columnas": {
+        "obra": "B",
+        "fecha": "C",
+        "detalle": "D",
+        "costo_gym": "E",
+        "costo_nogales": "F",
+        "gastos_generales": "G"
+      },
+      "identificador": "detalle"
+    },
+    "liquidacion": {
+      "nombre": "LIQUIDACIÓN SUELDOS",
+      "tipo": "registros",
+      "fila_datos": 5,
+      "columnas": {
+        "codigo": "B",
+        "obra": "C",
+        "trabajador": "D",
+        "sueldo_base": "E",
+        "dias_laborales": "F",
+        "dias_trabajados": "G",
+        "faltas": "H",
+        "valor_dia": "I",
+        "descuento_faltas": "J",
+        "a_pagar": "K",
+        "quincena_pagada": "L",
+        "saldo": "M"
+      },
+      "identificador": "trabajador"
+    },
+    "bencina": {
+      "nombre": "BENCINA Y TRANSPORTE",
+      "tipo": "registros",
+      "fila_datos": 7,
+      "columnas": {
+        "numero": "B",
+        "fecha": "C",
+        "vehiculo": "D",
+        "obra": "E",
+        "monto": "F",
+        "litros": "G",
+        "km": "H",
+        "detalle": "I"
+      },
+      "identificador": "numero"
+    },
+    "facturacion": {
+      "nombre": "FACTURACION Y CONTROL MENSUAL",
+      "tipo": "registros",
+      "fila_datos": 4,
+      "columnas": {
+        "concepto": "G",
+        "abril": "I",
+        "mayo": "J",
+        "julio": "K",
+        "agosto": "L",
+        "septiembre": "M",
+        "octubre": "N",
+        "noviembre": "O",
+        "diciembre": "P",
+        "enero": "Q",
+        "febrero": "R",
+        "marzo": "S",
+        "acumulado": "V"
+      },
+      "identificador": "concepto"
+    },
+    "resumen": {
+      "nombre": "PANEL GENERAL",
+      "tipo": "kpis",
+      "kpis": {
+        "total_cobrado": "C8",
+        "total_materiales": "D8",
+        "total_mano_obra": "E8",
+        "total_gastado": "G8",
+        "resultado_mes": "H8",
+        "total_por_cobrar": "D24",
+        "facturas_cobradas": "C30",
+        "sueldos_mes": "C31",
+        "materiales_mes": "C32",
+        "bencina_mes": "C33",
+        "saldo_mes": "C34",
+        "ppm_recuperar": "C42",
+        "neto_facturado": "C41"
+      }
+    }
+  }
+}

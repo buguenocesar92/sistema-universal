@@ -1,0 +1,35 @@
+{
+  "app": {
+    "name": "KraftDo",
+    "tagline": "Sistema Universal para PYMES"
+  },
+  "portal": {
+    "titulo": "Portal de carga de reportes mensuales",
+    "empresa": "Empresa",
+    "seleccionar": "— Seleccionar —",
+    "codigo_acceso": "Código de acceso",
+    "codigo_placeholder": "Ingresa el código que te dio KraftDo",
+    "archivo_excel": "Archivo Excel del mes",
+    "arrastra_aqui": "Arrastra el archivo aquí o haz clic para seleccionar",
+    "archivo_restricciones": "Solo archivos .xlsx o .xls — máximo 10MB",
+    "subir_btn": "Subir y generar reporte",
+    "subiendo": "Subiendo archivo y procesando...",
+    "exito_titulo": "Archivo recibido correctamente",
+    "exito_detalle": "El reporte se generará y enviará por correo en los próximos minutos.",
+    "error_conexion": "Error de conexión. Intenta de nuevo."
+  },
+  "errores": {
+    "token_incorrecto": "Código de acceso incorrecto",
+    "empresa_desconocida": "Empresa no reconocida",
+    "extension_invalida": "Solo se aceptan archivos .xlsx o .xls",
+    "tamano_excedido": "El archivo supera los 10MB permitidos",
+    "contenido_invalido": "El contenido no corresponde a un Excel válido"
+  },
+  "reportes": {
+    "generando": "Generando reporte...",
+    "enviado": "Reporte enviado a",
+    "fecha": "Fecha",
+    "total": "TOTAL",
+    "sin_datos": "Sin registros disponibles"
+  }
+}

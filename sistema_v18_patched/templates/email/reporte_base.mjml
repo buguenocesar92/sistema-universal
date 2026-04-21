@@ -1,0 +1,44 @@
+<mjml>
+<mj-body background-color="#f5f5f5">
+  <mj-section background-color="#1A1A2E" padding="20px">
+    <mj-column>
+      <mj-text color="#C8A951" font-size="22px" font-weight="bold">
+        {{titulo}}
+      </mj-text>
+      <mj-text color="#ffffff" font-size="13px">
+        {{subtitulo}}
+      </mj-text>
+    </mj-column>
+  </mj-section>
+
+  <mj-section background-color="#ffffff" padding="20px">
+    <mj-column>
+      <mj-text font-size="14px" color="#333">
+        Hola {{nombre_destinatario}},
+      </mj-text>
+      <mj-text font-size="14px" color="#333">
+        {{mensaje}}
+      </mj-text>
+
+      <mj-spacer height="16px" />
+
+      {{contenido_datos}}
+
+      <mj-spacer height="16px" />
+
+      <mj-button href="{{url_detalle}}" background-color="#1A1A2E" color="#C8A951">
+        Ver detalle completo
+      </mj-button>
+    </mj-column>
+  </mj-section>
+
+  <mj-section background-color="#f5f5f5" padding="10px">
+    <mj-column>
+      <mj-text font-size="11px" color="#888" align="center">
+        KraftDo SpA — Sistema Universal — {{fecha}}<br/>
+        Este correo se genero automaticamente. No responder.
+      </mj-text>
+    </mj-column>
+  </mj-section>
+</mj-body>
+</mjml>

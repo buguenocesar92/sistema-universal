@@ -1,0 +1,272 @@
+{
+  "empresa": {
+    "nombre": "KraftDo SpA",
+    "rut": "",
+    "direccion": "Machalí, VI Región de O'Higgins",
+    "telefono": "+569 3442 6430",
+    "email": "hola@kraftdo.cl",
+    "web": "www.kraftdo.cl",
+    "instagram": "@KraftdoNFC",
+    "color_primary": "1E3A5F",
+    "color_accent": "F5A623",
+    "logo_texto": "KRAFTDO",
+    "tagline": "CONECTA TU MUNDO CON UN TOQUE"
+  },
+
+  "fuente": {
+    "tipo": "local",
+    "archivo": "KraftDo_BD_Maestra_v5.xlsx",
+    "sheets_id": "",
+    "creds_json": "creds.json"
+  },
+
+  "logica_negocios": {
+    "iva": 0.19,
+    "anticipo_pct": 0.5,
+    "moneda": "CLP",
+    "identificador_cotizacion": "COT-{n:03d}",
+    "identificador_pedido": "KDO-{n:03d}",
+    "estados_pedido_activos": ["Confirmado", "En producción", "Listo"],
+    "estados_pedido_todos": ["Pendiente confirmación", "Confirmado", "En producción", "Listo", "Entregado", "Cancelado"]
+  },
+
+  "hojas": {
+
+    "productos_nfc": {
+      "nombre": "📦 Productos NFC",
+      "tipo": "catalogo",
+      "descripcion": "Catálogo de productos NFC: marcos, llaveros, tótems",
+      "fila_datos": 5,
+      "columnas": {
+        "sku":        "A",
+        "categoria":  "B",
+        "producto":   "C",
+        "variante":   "D",
+        "costo_ins":  "E",
+        "costo_hora": "F",
+        "costo":      "G",
+        "precio_1":   "H",
+        "precio_5":   "I",
+        "precio_10":  "J",
+        "margen":     "K",
+        "stock":      "L",
+        "dias_prod":  "M",
+        "estado":     "N",
+        "proveedor":  "O"
+      },
+      "sku_columna": "sku",
+      "filtro_activo": { "columna": "estado", "valor": "Activo" },
+      "precios": { "1": "precio_1", "5": "precio_5", "10": "precio_10" }
+    },
+
+    "sublimacion": {
+      "nombre": "🎨 Sublimación",
+      "tipo": "catalogo",
+      "descripcion": "Tazas, poleras, gorras y más con sublimación",
+      "fila_datos": 5,
+      "columnas": {
+        "sku":         "A",
+        "producto":    "B",
+        "variante":    "C",
+        "costo_ins":   "D",
+        "costo_sub":   "E",
+        "costo":       "F",
+        "precio_1":    "G",
+        "precio_5":    "H",
+        "margen":      "I",
+        "stock":       "J",
+        "dias_prod":   "K",
+        "estado":      "L",
+        "proveedor":   "M"
+      },
+      "sku_columna": "sku",
+      "filtro_activo": { "columna": "estado", "valor": "Activo" },
+      "precios": { "1": "precio_1", "5": "precio_5", "10": "precio_5" }
+    },
+
+    "impresion3d": {
+      "nombre": "🖨️ Impresión 3D",
+      "tipo": "catalogo",
+      "descripcion": "Figuras, llaveros y piezas en impresión 3D",
+      "fila_datos": 5,
+      "columnas": {
+        "sku":         "A",
+        "producto":    "B",
+        "descripcion": "C",
+        "gramos":      "D",
+        "costo_fil":   "E",
+        "horas":       "F",
+        "costo_hora":  "G",
+        "costo":       "H",
+        "precio_1":    "I",
+        "precio_5":    "J",
+        "margen":      "K",
+        "stock":       "L",
+        "estado":      "M"
+      },
+      "sku_columna": "sku",
+      "filtro_activo": { "columna": "estado", "valor": "Activo" },
+      "precios": { "1": "precio_1", "5": "precio_5", "10": "precio_5" }
+    },
+
+    "packs": {
+      "nombre": "📦 Packs y Combos",
+      "tipo": "catalogo",
+      "descripcion": "Packs combinados con descuento",
+      "fila_datos": 5,
+      "columnas": {
+        "sku":          "A",
+        "producto":     "B",
+        "descripcion":  "C",
+        "costo":        "D",
+        "margen":       "E",
+        "precio_1":     "F",
+        "precio_unit_eq": "G",
+        "ahorro":       "H",
+        "estado":       "I"
+      },
+      "sku_columna": "sku",
+      "filtro_activo": { "columna": "estado", "valor": "Activo" },
+      "precios": { "1": "precio_1", "5": "precio_1", "10": "precio_1" }
+    },
+
+    "clientes": {
+      "nombre": "👥 Clientes",
+      "tipo": "registros",
+      "descripcion": "Registro de clientes KraftDo",
+      "fila_datos": 5,
+      "columnas": {
+        "numero":   "A",
+        "nombre":   "B",
+        "whatsapp": "C",
+        "ciudad":   "D",
+        "correo":   "E",
+        "rubro":    "F",
+        "canal":    "G",
+        "fecha":    "H",
+        "obs":      "I"
+      },
+      "identificador": "nombre"
+    },
+
+    "pedidos": {
+      "nombre": "📋 Pedidos",
+      "tipo": "registros",
+      "descripcion": "Registro de pedidos y ventas",
+      "fila_datos": 5,
+      "columnas": {
+        "numero":     "A",
+        "fecha":      "B",
+        "cliente":    "C",
+        "whatsapp":   "D",
+        "ciudad":     "E",
+        "sku":        "F",
+        "producto":   "G",
+        "categoria":  "H",
+        "cantidad":   "I",
+        "precio":     "J",
+        "costo":      "K",
+        "total":      "L",
+        "ganancia":   "M",
+        "margen_pct": "N",
+        "anticipo":   "O",
+        "saldo":      "P",
+        "f_entrega":  "Q",
+        "dias_rest":  "R",
+        "estado":     "S",
+        "canal":      "T",
+        "elaborado":  "U",
+        "obs":        "V"
+      },
+      "identificador": "numero",
+      "filtro_activos": {
+        "columna": "estado",
+        "valores": ["Confirmado", "En producción", "Listo"]
+      }
+    },
+
+    "produccion": {
+      "nombre": "📄 Producción",
+      "tipo": "registros",
+      "descripcion": "Órdenes de producción activas",
+      "fila_datos": 5,
+      "columnas": {
+        "numero":      "A",
+        "cliente":     "B",
+        "whatsapp":    "C",
+        "sku":         "D",
+        "producto":    "E",
+        "cantidad":    "F",
+        "f_pedido":    "G",
+        "f_entrega":   "H",
+        "dias_rest":   "I",
+        "estado":      "J",
+        "elaborado":   "K",
+        "obs":         "L",
+        "precio":      "M",
+        "total":       "N"
+      },
+      "identificador": "numero"
+    },
+
+    "proveedores": {
+      "nombre": "🏪 Proveedores",
+      "tipo": "registros",
+      "descripcion": "Lista de proveedores y precios de insumos",
+      "fila_datos": 3,
+      "columnas": {
+        "proveedor":    "B",
+        "web":          "C",
+        "producto":     "D",
+        "precio_unit":  "E",
+        "precio_mayor": "F",
+        "unidad_mayor": "G",
+        "despacho":     "H",
+        "actualizado":  "I"
+      },
+      "identificador": "proveedor"
+    },
+
+    "caja": {
+      "nombre": "💵 Caja",
+      "tipo": "registros",
+      "descripcion": "Libro de caja: ingresos y egresos",
+      "fila_datos": 8,
+      "columnas": {
+        "numero":      "A",
+        "fecha":       "B",
+        "categoria":   "C",
+        "tipo":        "D",
+        "monto":       "E",
+        "saldo":       "F",
+        "referencia":  "G",
+        "contraparte": "H",
+        "descripcion": "I",
+        "elaborado":   "J"
+      },
+      "identificador": "numero",
+      "kpis_celdas": {
+        "saldo_actual":   "A5",
+        "total_ingresos": "C5",
+        "total_egresos":  "E5",
+        "ing_pedidos":    "G5",
+        "gasto_insumos":  "I5"
+      }
+    },
+
+    "resumen": {
+      "nombre": "📊 Resumen",
+      "tipo": "kpis",
+      "descripcion": "Dashboard de KPIs del negocio",
+      "kpis": {
+        "saldo_caja":      "A4",
+        "total_vendido":   "B4",
+        "ganancia_total":  "C4",
+        "por_cobrar":      "D4",
+        "pedidos_activos": "E4",
+        "margen_promedio": "F4"
+      }
+    }
+
+  }
+}

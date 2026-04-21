@@ -1,0 +1,30 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'api'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['api:8000']
+
+  - job_name: 'portal'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['portal:8002']
+
+  - job_name: 'mysql'
+    static_configs:
+      - targets: ['mysql_exporter:9104']
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis_exporter:9121']
+
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node_exporter:9100']
