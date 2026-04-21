@@ -1,4 +1,6 @@
 FROM python:3.12-slim
+ENV LANG=en_US.UTF-8
+ENV PYTHONIOENCODING=utf-8
 
 LABEL maintainer="hola@kraftdo.cl"
 LABEL version="18.0"
