@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "kraftdo-tools": { "command": "/home/cesar/Dev/tools/venv/bin/python3", "args": ["/home/cesar/Dev/tools/mcp_server.py"] }
+  }
+}
