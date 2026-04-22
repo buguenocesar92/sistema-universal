@@ -423,14 +423,8 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
             "                    ->options(fn() => " + ns_models + modelo + "::distinct()->pluck('estado', 'estado')->toArray()),"
         )
 
-    # ExportAction — usando concatenación para evitar backslash en f-string
-    export_ns  = "\\pxlrbt\\FilamentExcel\\"
-    export_action = (
-        "            " + export_ns + "Actions\\Tables\\ExportAction::make()\n"
-        "                ->exports([\n"
-        "                    " + export_ns + "Exports\\ExcelExport::make()->fromTable(),\n"
-        "                ]),"
-    )
+    # ExportAction desactivado — requiere pxlrbt/filament-excel
+    export_action = ""
 
     # Relaciones como Select en el formulario
     rel_fields = ""
@@ -456,39 +450,37 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
         "use App\\Filament\\Resources\\" + resource + "\\Pages;\n"
         "use App\\Models\\" + modelo + ";\n"
         "use Filament\\Forms;\n"
-        "use Filament\\Forms\\Form;\n"
+        "use Filament\\Schemas\\Schema;\n"
         "use Filament\\Resources\\Resource;\n"
         "use Filament\\Tables;\n"
         "use Filament\\Tables\\Table;\n\n"
         "class " + resource + " extends Resource\n"
         "{\n"
         "    protected static ?string $model = " + modelo + "::class;\n"
-        "    protected static ?string $navigationIcon = 'heroicon-o-table-cells';\n"
+        "    protected static \BackedEnum|string|null $navigationIcon = 'heroicon-o-table-cells';\n"
         "    protected static ?string $navigationLabel = '" + alias.replace('_',' ').title() + "';\n\n"
-        "    public static function form(Form $form): Form\n"
+        "    public static function form(Schema $schema): Schema\n"
         "    {\n"
-        "        return $form->schema([\n"
+        "        return $schema->components([\n"
         + form_str + rel_fields + "\n"
         "        ]);\n"
         "    }\n\n"
         "    public static function table(Table $table): Table\n"
         "    {\n"
         "        return $table\n"
-        "            ->headerActions([\n"
-        + export_action + "\n"
-        "            ])\n"
+        ""  # headerActions removido
         "            ->columns([\n"
         + table_str + "\n"
         "            ])\n"
         "            ->filters([" + filters_str + "\n"
         "            ])\n"
         "            ->actions([\n"
-        "                Tables\\Actions\\EditAction::make(),\n"
-        "                Tables\\Actions\\DeleteAction::make(),\n"
+        "                \\Filament\\Actions\\EditAction::make(),\n"
+        "                \\Filament\\Actions\\DeleteAction::make(),\n"
         "            ])\n"
         "            ->bulkActions([\n"
-        "                Tables\\Actions\\BulkActionGroup::make([\n"
-        "                    Tables\\Actions\\DeleteBulkAction::make(),\n"
+        "                \\Filament\\Actions\\BulkActionGroup::make([\n"
+        "                    \\Filament\\Actions\\DeleteBulkAction::make(),\n"
         "                ]),\n"
         "            ]);\n"
         "    }\n\n"
@@ -750,13 +742,13 @@ def gen_filament_widget(cfg: dict) -> str:
         )
 
     stats_str = "\n".join(stats_lines)
-    ns_w = "Filament\\Widgets\\"
+    ns_w = "Filament\\Widgets"
 
     return (
         "<?php\n\n"
         "namespace App\\" + ns_w + ";\n\n"
-        "use " + ns_w + "StatsOverviewWidget as BaseWidget;\n"
-        "use " + ns_w + "StatsOverviewWidget\\Stat;\n\n"
+        "use " + ns_w + "\\StatsOverviewWidget as BaseWidget;\n"
+        "use " + ns_w + "\\StatsOverviewWidget\\Stat;\n\n"
         "class KraftDoStatsWidget extends BaseWidget\n"
         "{\n"
         "    protected function getStats(): array\n"
@@ -833,6 +825,89 @@ def _auto_indices(columnas: dict) -> list[str]:
     return indices
 
 
+
+def _crear_base_laravel(output_dir: str, empresa: str, cfg: dict) -> bool:
+    """
+    Crea un proyecto Laravel completo con Filament instalado.
+    Retorna True si se creó correctamente.
+    """
+    import subprocess, shutil
+
+    nombre = cfg["empresa"]["nombre"]
+    db_name = f"kraftdo_{empresa}"
+
+    print(f"\n🚀 Creando base Laravel en {output_dir}...")
+
+    # Verificar que composer esté disponible
+    if not shutil.which("composer"):
+        print("❌ composer no encontrado — instalarlo primero")
+        print("   curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer")
+        return False
+
+    # Si ya existe y tiene artisan, no recrear
+    if os.path.exists(os.path.join(output_dir, "artisan")):
+        print(f"  ✓ Base Laravel ya existe en {output_dir}")
+        return True
+
+    parent = os.path.dirname(os.path.abspath(output_dir))
+    dirname = os.path.basename(output_dir)
+
+    # 1. composer create-project
+    print("  📦 Ejecutando composer create-project laravel/laravel ...")
+    r = subprocess.run(
+        ["composer", "create-project", "laravel/laravel", dirname, "--no-interaction", "--quiet"],
+        cwd=parent, capture_output=True, text=True
+    )
+    if r.returncode != 0:
+        print(f"  ❌ Error en composer create-project:\n{r.stderr[:500]}")
+        return False
+    print("  ✓ Laravel instalado")
+
+    # 2. composer require filament
+    print("  🎛️  Instalando Filament 3 ...")
+    r = subprocess.run(
+        ["composer", "require", "filament/filament:^4.0", "--no-interaction", "--quiet"],
+        cwd=output_dir, capture_output=True, text=True
+    )
+    if r.returncode != 0:
+        print(f"  ❌ Error instalando Filament:\n{r.stderr[:500]}")
+        return False
+    print("  ✓ Filament instalado")
+
+    # 3. php artisan filament:install --panels
+    print("  ⚙️  Configurando panel Filament ...")
+    r = subprocess.run(
+        ["php", "artisan", "filament:install", "--panels", "--no-interaction"],
+        cwd=output_dir, capture_output=True, text=True
+    )
+    if r.returncode != 0:
+        print(f"  ❌ Error en filament:install:\n{r.stderr[:300]}")
+        return False
+    print("  ✓ Panel Filament configurado")
+
+    # 4. Escribir .env con datos de la empresa
+    env_path = os.path.join(output_dir, ".env")
+    if os.path.exists(env_path):
+        with open(env_path, encoding="utf-8") as f:
+            env = f.read()
+        env = re.sub(r'APP_NAME=.*', 'APP_NAME="' + nombre + '"', env)
+        env = re.sub(r"DB_DATABASE=.*", f"DB_DATABASE={db_name}", env)
+        env = re.sub(r"DB_USERNAME=.*", "DB_USERNAME=kraftdo", env)
+        env = re.sub(r"DB_PASSWORD=.*", "DB_PASSWORD=", env)
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.write(env)
+        print(f"  ✓ .env configurado para {nombre}")
+
+    # 5. php artisan key:generate
+    subprocess.run(
+        ["php", "artisan", "key:generate", "--no-interaction"],
+        cwd=output_dir, capture_output=True
+    )
+    print("  ✓ APP_KEY generado")
+
+    print(f"\n✅ Base Laravel lista en {output_dir}\n")
+    return True
+
 def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = None):
     # Cargar config
     base = os.path.dirname(os.path.abspath(__file__))
@@ -851,6 +926,11 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
     print(f"  KraftDo Generator — {nombre_empresa}")
     print(f"  Output: {output_dir}")
     print(f"{'='*60}\n")
+
+    # Opción B: crear base Laravel completa si no existe
+    if not preview:
+        if not _crear_base_laravel(output_dir, empresa, cfg):
+            print("⚠️  Continuando sin crear base Laravel — solo se generan los archivos")
 
     archivos = {}  # path → contenido
 
@@ -885,10 +965,10 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
             pass
 
     # Calcular relaciones y fórmulas una sola vez
-    rels = detectar_relaciones(cfg) if RELACIONES_OK else []
+    rels = []  # relaciones desactivadas — genera metodos duplicados en modelos
     rels_x_tabla = relaciones_por_tabla(rels) if RELACIONES_OK else {}
     excel_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), cfg.get("fuente", {}).get("archivo", ""))
-    formulas_all = analizar_excel_formulas(excel_path, cfg) if RELACIONES_OK and os.path.exists(excel_path) else {}
+    formulas_all = {}  # DESACTIVADO: formula_parser genera PHP invalido con IFs anidados — pendiente fix
     # Pasar datos a gen_modelo via atributos
     gen_modelo._relaciones = rels
     gen_modelo._formulas   = formulas_all

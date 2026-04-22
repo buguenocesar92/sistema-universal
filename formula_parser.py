@@ -85,7 +85,18 @@ def formula_a_php(formula: str, columnas: dict) -> dict:
             "formula_original": formula_original,
         }
 
-    # IF(condicion, valor_si, valor_no)
+    # IF(condicion, valor_si, valor_no) — solo IFs simples, no anidados
+    # Detectar IF anidado antes de intentar parsear
+    if re.match(r'IF\s*\(', f, re.IGNORECASE):
+        # Contar IFs anidados
+        if f.upper().count("IF(") > 1:
+            return {
+                "tipo": "no_convertible",
+                "php": None,
+                "descripcion": "IF anidado → implementar manualmente",
+                "formula_original": formula_original,
+            }
+
     if_match = re.match(
         r'IF\s*\(\s*(.+?)\s*,\s*(.+?)\s*,\s*(.+?)\s*\)$',
         f, re.IGNORECASE
