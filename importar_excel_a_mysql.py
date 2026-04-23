@@ -56,16 +56,23 @@ def importar(empresa: str, laravel_dir: str):
 
         columnas = hoja_cfg["columnas"]
         fila_ini = hoja_cfg.get("fila_datos", 5)
-        tabla = alias if alias != "kpis_caja" else None
-        if not tabla:
+        if tipo == "kpis":
             continue
 
-        # Nombre de tabla en MySQL = alias (ej: productos, clientes)
-        tabla_mysql = alias + "s" if not alias.endswith("s") else alias
-        if alias == "caja":
-            tabla_mysql = "cajas"
-        elif alias == "proveedores":
-            tabla_mysql = "proveedores"
+        # Leer nombre de tabla real desde la migración generada
+        import glob, re as _re
+        tabla_mysql = None
+        patron = os.path.join(laravel_dir, "database", "migrations", f"*create_{alias}*")
+        archivos = glob.glob(patron)
+        if archivos:
+            with open(archivos[0]) as mf:
+                m = _re.search(r"Schema::create\(['\"]([\w]+)['\"]", mf.read())
+                if m:
+                    tabla_mysql = m.group(1)
+        if not tabla_mysql:
+            # Fallback: plural simple
+            tabla_mysql = alias if alias.endswith("s") else alias + "s"
+            print(f"  ⚠️  Tabla para {alias} inferida como {tabla_mysql}")
 
         col_indices = {campo: col_letra_a_num(letra) for campo, letra in columnas.items()}
         campos = list(columnas.keys())

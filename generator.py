@@ -105,7 +105,7 @@ def nombre_modelo(alias: str) -> str:
 
 
 def nombre_migration(alias: str, idx: int) -> str:
-    ts = datetime.now().strftime("%Y_%m_%d") + f"_{idx:06d}"
+    ts = f"2026_01_01_{idx:06d}"  # fecha fija para evitar migraciones duplicadas
     return f"{ts}_create_{nombre_tabla(alias)}_table"
 
 
@@ -290,9 +290,25 @@ def gen_modelo(alias: str, cfg_hoja: dict, empresa_cfg: dict, relaciones=None, f
         rels = gen_modelo._relaciones
         belongs = gen_eloquent_relationships(rels, tabla)
         hasmany = gen_hasmany_relationships(rels, tabla, {})
-        combined = "\n\n".join(filter(None, [belongs, hasmany]))
-        if combined:
-            rels_str = "\n\n" + combined
+        # Deduplicar métodos por nombre de función
+        todos_metodos = []
+        nombres_vistos = set()
+        for bloque in [belongs, hasmany]:
+            if not bloque:
+                continue
+            for metodo in bloque.split("\n\n"):
+                metodo = metodo.strip()
+                if not metodo:
+                    continue
+                # Extraer nombre del método
+                import re as _re2
+                m = _re2.search(r"public function (\w+)\(", metodo)
+                nombre = m.group(1) if m else metodo[:30]
+                if nombre not in nombres_vistos:
+                    nombres_vistos.add(nombre)
+                    todos_metodos.append(metodo)
+        if todos_metodos:
+            rels_str = "\n\n" + "\n\n".join(todos_metodos)
 
     # Scopes por tipo si la hoja es consolidada
     if _es_consolidado(cfg_hoja):
@@ -984,10 +1000,10 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
             pass
 
     # Calcular relaciones y fórmulas una sola vez
-    rels = []  # relaciones desactivadas — genera metodos duplicados en modelos
+    rels = detectar_relaciones(cfg) if RELACIONES_OK else []
     rels_x_tabla = relaciones_por_tabla(rels) if RELACIONES_OK else {}
     excel_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), cfg.get("fuente", {}).get("archivo", ""))
-    formulas_all = {}  # DESACTIVADO: formula_parser genera PHP invalido con IFs anidados — pendiente fix
+    formulas_all = analizar_excel_formulas(excel_path, cfg) if RELACIONES_OK and os.path.exists(excel_path) else {}
     # Pasar datos a gen_modelo via atributos
     gen_modelo._relaciones = rels
     gen_modelo._formulas   = formulas_all

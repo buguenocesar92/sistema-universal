@@ -1,3 +1,31 @@
+
+def _split_if_args(formula: str) -> list:
+    """Divide los 3 argumentos de IF() contando paréntesis — maneja anidados."""
+    # Encontrar el primer paréntesis abierto
+    start = formula.index("(") + 1
+    depth = 1
+    args = []
+    current = ""
+    i = start
+    while i < len(formula) and depth > 0:
+        c = formula[i]
+        if c == "(":
+            depth += 1
+            current += c
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                args.append(current.strip())
+            else:
+                current += c
+        elif c == "," and depth == 1:
+            args.append(current.strip())
+            current = ""
+        else:
+            current += c
+        i += 1
+    return args if len(args) == 3 else []
+
 """
 KraftDo — formula_parser.py
 Parsea fórmulas Excel y las convierte a:
@@ -97,22 +125,28 @@ def formula_a_php(formula: str, columnas: dict) -> dict:
                 "formula_original": formula_original,
             }
 
-    if_match = re.match(
-        r'IF\s*\(\s*(.+?)\s*,\s*(.+?)\s*,\s*(.+?)\s*\)$',
-        f, re.IGNORECASE
-    )
-    if if_match:
-        cond_raw, v_si_raw, v_no_raw = if_match.groups()
-        cond = _expr_a_php(cond_raw, columnas)
-        v_si = _expr_a_php(v_si_raw, columnas)
-        v_no = _expr_a_php(v_no_raw, columnas)
-        php = f"return ({cond}) ? ({v_si}) : ({v_no});"
-        return {
-            "tipo":      "condicional",
-            "php":       php,
-            "descripcion": f"Valor condicional: si {cond_raw} → {v_si_raw}, sino {v_no_raw}",
-            "formula_original": formula_original,
-        }
+    # Parser de IF con conteo de paréntesis — maneja IFs anidados
+    if re.match(r'IF\s*\(', f, re.IGNORECASE):
+        partes = _split_if_args(f)
+        if partes and len(partes) == 3:
+            cond_raw, v_si_raw, v_no_raw = partes
+            cond = _expr_a_php(cond_raw, columnas)
+            v_si = _expr_a_php(v_si_raw, columnas)
+            v_no = _expr_a_php(v_no_raw, columnas)
+            # Si alguna parte contiene IF, aplicar recursión
+            if "IF(" in v_si.upper():
+                v_si_conv = formula_a_php("=" + v_si_raw, columnas)
+                v_si = v_si_conv["php"].replace("return ", "").rstrip(";") if v_si_conv["php"] else v_si
+            if "IF(" in v_no.upper():
+                v_no_conv = formula_a_php("=" + v_no_raw, columnas)
+                v_no = v_no_conv["php"].replace("return ", "").rstrip(";") if v_no_conv["php"] else v_no
+            php = f"return ({cond}) ? ({v_si}) : ({v_no});"
+            return {
+                "tipo":      "condicional",
+                "php":       php,
+                "descripcion": f"Valor condicional: si {cond_raw}",
+                "formula_original": formula_original,
+            }
 
     # ROUND(expr, decimales)
     round_match = re.match(r'ROUND\s*\(\s*(.+?)\s*,\s*(\d+)\s*\)$', f, re.IGNORECASE)
@@ -150,8 +184,21 @@ def _expr_a_php(expr: str, columnas: dict) -> str:
     e = expr.strip()
     # Reemplazar referencias de celda
     e = cols_a_campos(e, columnas)
-    # Reemplazar operadores Excel → PHP (son iguales salvo ^)
-    e = e.replace("^", "**")  # potencia
+    # Funciones Excel → PHP
+    e = re.sub(r'TODAY\(\)', 'date("Y-m-d")', e, flags=re.IGNORECASE)
+    e = re.sub(r'NOW\(\)', 'now()', e, flags=re.IGNORECASE)
+    e = re.sub(r'ROUND\((.+?),\s*(\d+)\)', lambda m: f"round({m.group(1)}, {m.group(2)})", e, flags=re.IGNORECASE)
+    e = re.sub(r'AND\((.+?)\)', lambda m: "(" + " && ".join(a.strip() for a in m.group(1).split(",")) + ")", e, flags=re.IGNORECASE)
+    e = re.sub(r'OR\((.+?)\)', lambda m: "(" + " || ".join(a.strip() for a in m.group(1).split(",")) + ")", e, flags=re.IGNORECASE)
+    e = re.sub(r'TEXT\((.+?),\s*["\'].*?["\']\)', lambda m: m.group(1), e, flags=re.IGNORECASE)
+    e = re.sub(r'IFERROR\((.+?),\s*(.+?)\)', lambda m: f"(function(){{ try {{ return {m.group(1)}; }} catch(\$e) {{ return {m.group(2)}; }} }})()", e, flags=re.IGNORECASE)
+    e = re.sub(r'LEN\((.+?)\)', lambda m: f"strlen({m.group(1)})", e, flags=re.IGNORECASE)
+    e = re.sub(r'UPPER\((.+?)\)', lambda m: f"strtoupper({m.group(1)})", e, flags=re.IGNORECASE)
+    e = re.sub(r'LOWER\((.+?)\)', lambda m: f"strtolower({m.group(1)})", e, flags=re.IGNORECASE)
+    # Comparadores Excel → PHP
+    e = e.replace("<>", "!=")
+    # Operadores potencia
+    e = e.replace("^", "**")
     # Limpiar espacios extra
     e = re.sub(r'\s+', ' ', e).strip()
     return e
