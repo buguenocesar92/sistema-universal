@@ -358,7 +358,7 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
     for campo in cols[:10]:  # max 10 campos visibles
         t, mod = inferir_tipo(campo)
         label  = campo.replace("_", " ").capitalize()
-        req    = ".required()" if "nullable" not in mod else ".nullable()"
+        req    = ""  # Filament 4: nullable/required se maneja en validación
 
         if campo == "estado" and estados:
             opts = "\n".join(
