@@ -92,6 +92,15 @@ def formula_a_php(formula: str, columnas: dict) -> dict:
     f = f[1:].strip()  # quitar el =
     formula_original = f
 
+    # Detectar referencias a otras hojas: 'Hoja'!Celda o Hoja!Celda
+    if "!" in f:
+        return {
+            "tipo": "no_convertible",
+            "php": None,
+            "descripcion": "Referencia a otra hoja — implementar manualmente",
+            "formula_original": formula_original,
+        }
+
     # Fórmulas no convertibles (requieren lógica compleja)
     no_convertibles = ["VLOOKUP", "HLOOKUP", "INDEX", "MATCH", "OFFSET",
                        "INDIRECT", "SUMIF", "COUNTIF", "AVERAGEIF"]
@@ -184,6 +193,8 @@ def _expr_a_php(expr: str, columnas: dict) -> str:
     e = expr.strip()
     # Reemplazar referencias de celda
     e = cols_a_campos(e, columnas)
+    # Limpiar + unario al inicio
+    e = re.sub(r"^\+", "", e.strip())
     # Funciones Excel → PHP
     e = re.sub(r'TODAY\(\)', 'date("Y-m-d")', e, flags=re.IGNORECASE)
     e = re.sub(r'NOW\(\)', 'now()', e, flags=re.IGNORECASE)

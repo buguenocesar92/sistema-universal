@@ -272,6 +272,7 @@ def gen_modelo(alias: str, cfg_hoja: dict, empresa_cfg: dict, relaciones=None, f
         elif tipo == "timestamp":
             casts.append(f"'{campo}' => 'datetime'")
     casts_str = ",\n        ".join(casts) if casts else ""
+    casts_block = "\n        " + casts_str + "\n    " if casts_str else ""
 
     # scope de activos si tiene campo estado
     scope = ""
@@ -350,9 +351,7 @@ class {modelo} extends Model
         {fillable_str},
     ];
 
-    protected $casts = [
-        {casts_str},
-    ];{scope}{rels_str}{accessors_str}
+    protected $casts = [{casts_block}];{scope}{rels_str}{accessors_str}
 }}
 """
 
