@@ -727,7 +727,7 @@ def gen_api_controller(alias: str, cfg_hoja: dict) -> str:
 def gen_filament_widget(cfg: dict) -> str:
     """Genera un widget de KPIs para el dashboard de Filament."""
     hojas     = cfg.get("hojas", {})
-    registros = {a: h for a, h in hojas.items() if h.get("tipo") == "registros"}
+    registros = {a: h for a, h in hojas.items() if h.get("tipo") in ("registros", "catalogo")}
     ns = "\\App\\Models\\"
 
     stats_lines = []
@@ -835,6 +835,7 @@ def _crear_base_laravel(output_dir: str, empresa: str, cfg: dict) -> bool:
 
     nombre = cfg["empresa"]["nombre"]
     db_name = f"kraftdo_{empresa}"
+    db_pass = "4c4e99bc4d1c2e6a"  # password MySQL del usuario kraftdo
 
     print(f"\n🚀 Creando base Laravel en {output_dir}...")
 
@@ -891,12 +892,30 @@ def _crear_base_laravel(output_dir: str, empresa: str, cfg: dict) -> bool:
         with open(env_path, encoding="utf-8") as f:
             env = f.read()
         env = re.sub(r'APP_NAME=.*', 'APP_NAME="' + nombre + '"', env)
+        # Laravel 13 tiene DB_ comentadas — descomentar y configurar
+        env = re.sub(r"#\s*DB_CONNECTION=.*", "DB_CONNECTION=mysql", env)
+        env = re.sub(r"DB_CONNECTION=.*", "DB_CONNECTION=mysql", env)
+        env = re.sub(r"#\s*DB_HOST=.*", "DB_HOST=127.0.0.1", env)
+        env = re.sub(r"DB_HOST=.*", "DB_HOST=127.0.0.1", env)
+        env = re.sub(r"#\s*DB_PORT=.*", "DB_PORT=3306", env)
+        env = re.sub(r"DB_PORT=.*", "DB_PORT=3307", env)
+        env = re.sub(r"#\s*DB_DATABASE=.*", f"DB_DATABASE={db_name}", env)
+        env = re.sub(r"DB_DATABASE=.*", f"DB_DATABASE={db_name}", env)
+        env = re.sub(r"#\s*DB_USERNAME=.*", "DB_USERNAME=kraftdo", env)
+        env = re.sub(r"DB_USERNAME=.*", "DB_USERNAME=kraftdo", env)
+        env = re.sub(r"DB_PASSWORD=\S*", f"DB_PASSWORD={db_pass}", env)
+        env = re.sub(r"DB_PASSWORD=\S*", f"DB_PASSWORD={db_pass}", env)
+        env = re.sub(r"DB_HOST=.*", "DB_HOST=127.0.0.1", env)
+        env = re.sub(r"DB_PORT=.*", "DB_PORT=3307", env)
         env = re.sub(r"DB_DATABASE=.*", f"DB_DATABASE={db_name}", env)
         env = re.sub(r"DB_USERNAME=.*", "DB_USERNAME=kraftdo", env)
         env = re.sub(r"DB_PASSWORD=.*", "DB_PASSWORD=", env)
         with open(env_path, "w", encoding="utf-8") as f:
             f.write(env)
-        print(f"  ✓ .env configurado para {nombre}")
+        # Asegurar DB_PASSWORD en el .env
+        with open(env_path, "a", encoding="utf-8") as f:
+            f.write(f"\nDB_PASSWORD={db_pass}\n")
+        print(f"  ✓ .env configurado para {nombre} (mysql)")
 
     # 5. php artisan key:generate
     subprocess.run(
@@ -1049,6 +1068,71 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
             f.write(contenido)
 
     print(f"✅ Generado en: {output_dir}")
+
+    # Auto-setup: migrar y crear usuario admin si no es preview
+    if not preview:
+        import subprocess
+        db_pass = "4c4e99bc4d1c2e6a"
+        db_name = f"kraftdo_{empresa}"
+        db_root_pass = "51381c69b62f87a6"
+        print("\n🔧 Configurando base de datos...")
+        # Crear BD si no existe
+        try:
+            import mysql.connector
+            conn = mysql.connector.connect(
+                host="127.0.0.1", port=3307,
+                user="root", password=db_root_pass
+            )
+            conn.cursor().execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}`")
+            cur = conn.cursor()
+            cur.execute(f"GRANT ALL ON `{db_name}`.* TO 'kraftdo'@'%'")
+            cur.execute("FLUSH PRIVILEGES")
+            conn.commit()
+            conn.close()
+            print(f"  ✓ BD {db_name} creada")
+        except Exception as e:
+            print(f"  ⚠️  No se pudo crear la BD: {e}")
+        # Migrar
+        r = subprocess.run(
+            ["php", "artisan", "migrate:fresh", "--force"],
+            cwd=output_dir, capture_output=True, text=True
+        )
+        if r.returncode == 0:
+            print("  ✓ Migraciones ejecutadas")
+        else:
+            print(f"  ⚠️  Error en migrate: {r.stderr[:200]}")
+
+        # Crear usuario admin
+        tinker_cmd = (
+            "App\\Models\\User::create(["
+            "'name'=>'Admin',"
+            f"'email'=>'{cfg['empresa'].get('email','admin@kraftdo.cl')}',"
+            "'password'=>bcrypt('kraftdo2026')"
+            "]);echo 'ok';"
+        )
+        subprocess.run(
+            ["php", "artisan", "tinker", "--execute", tinker_cmd],
+            cwd=output_dir, capture_output=True
+        )
+        print("  ✓ Usuario admin creado (password: kraftdo2026)")
+
+        # Importar Excel
+        importer = os.path.join(os.path.dirname(os.path.abspath(__file__)), "importar_excel_a_mysql.py")
+        if os.path.exists(importer):
+            print("\n📊 Importando datos del Excel...")
+            r = subprocess.run(
+                ["python3", importer, empresa, output_dir],
+                capture_output=True, text=True
+            )
+            print(r.stdout)
+            if r.returncode != 0:
+                print(f"  ⚠️  {r.stderr[:200]}")
+
+        print(f"\n🚀 Panel listo en: php artisan serve --host=0.0.0.0 --port=8080")
+        print(f"   URL: http://localhost:8080/admin")
+        print(f"   Email: {cfg['empresa'].get('email','admin@kraftdo.cl')}")
+        print(f"   Password: kraftdo2026\n")
+
     print(f"\nPróximos pasos:")
     print(f"  1. Copiar archivos al proyecto Laravel")
     print(f"  2. Configurar .env con tu base de datos")
