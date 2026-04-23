@@ -1144,8 +1144,11 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
             if r.returncode != 0:
                 print(f"  ⚠️  {r.stderr[:200]}")
 
-        print(f"\n🚀 Panel listo en: php artisan serve --host=0.0.0.0 --port=8080")
-        print(f"   URL: http://localhost:8080/admin")
+        # Puerto único por empresa basado en hash del nombre
+        import hashlib
+        puerto = 8080 + int(hashlib.md5(empresa.encode()).hexdigest(), 16) % 900
+        print(f"\n🚀 Panel listo en: php artisan serve --host=0.0.0.0 --port={puerto}")
+        print(f"   URL: http://localhost:{puerto}/admin")
         print(f"   Email: {cfg['empresa'].get('email','admin@kraftdo.cl')}")
         print(f"   Password: kraftdo2026\n")
 
