@@ -457,7 +457,7 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
         "class " + resource + " extends Resource\n"
         "{\n"
         "    protected static ?string $model = " + modelo + "::class;\n"
-        "    protected static \BackedEnum|string|null $navigationIcon = 'heroicon-o-table-cells';\n"
+        "    protected static \\BackedEnum|string|null $navigationIcon = 'heroicon-o-table-cells';\n"
         "    protected static ?string $navigationLabel = '" + alias.replace('_',' ').title() + "';\n\n"
         "    public static function form(Schema $schema): Schema\n"
         "    {\n"
@@ -834,7 +834,7 @@ def _crear_base_laravel(output_dir: str, empresa: str, cfg: dict) -> bool:
     import subprocess, shutil
 
     nombre = cfg["empresa"]["nombre"]
-    db_name = f"kraftdo_{empresa}"
+    db_name = empresa  # usar el nombre de empresa directamente como nombre de BD
     db_pass = "4c4e99bc4d1c2e6a"  # password MySQL del usuario kraftdo
 
     print(f"\n🚀 Creando base Laravel en {output_dir}...")
@@ -1073,7 +1073,7 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
     if not preview:
         import subprocess
         db_pass = "4c4e99bc4d1c2e6a"
-        db_name = f"kraftdo_{empresa}"
+        db_name = empresa  # usar el nombre de empresa directamente como nombre de BD
         db_root_pass = "51381c69b62f87a6"
         print("\n🔧 Configurando base de datos...")
         # Crear BD si no existe
@@ -1133,10 +1133,6 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
         print(f"   Email: {cfg['empresa'].get('email','admin@kraftdo.cl')}")
         print(f"   Password: kraftdo2026\n")
 
-    print(f"\nPróximos pasos:")
-    print(f"  1. Copiar archivos al proyecto Laravel")
-    print(f"  2. Configurar .env con tu base de datos")
-    print(f"  3. chmod +x install.sh && ./install.sh\n")
 
     return archivos
 
