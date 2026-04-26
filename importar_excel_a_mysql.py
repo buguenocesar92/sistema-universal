@@ -84,18 +84,37 @@ def importar(empresa: str, laravel_dir: str):
                 val = ws.cell(row, idx).value
                 valores[campo] = val
 
-            # Saltar filas completamente vacías o que parecen totales/encabezados
-            str_vals = [str(v).strip() for v in valores.values() if v is not None]
+            # Saltar filas completamente vacías
             if all(v is None for v in valores.values()):
                 continue
-            # Saltar filas que contienen palabras de encabezado
+
+            # Saltar filas con más del 70% de valores vacíos
+            total = len(valores)
+            vacios = sum(1 for v in valores.values() if v is None or str(v).strip() == "")
+            if total > 0 and vacios / total > 0.7:
+                continue
+
+            # Saltar filas con palabras de encabezado/totales en cualquier columna
             palabras_skip = ["TOTALES", "TOTAL", "SUBTOTAL", "INGRESAR", "AUTO", "AMARILLO"]
-            # Buscar palabras de skip en CUALQUIER columna
             todos_str = [str(v or "").strip().upper() for v in valores.values()]
             if any(any(p in v for p in palabras_skip) for v in todos_str):
                 continue
-            if all(v is None for v in valores.values()):
+
+            # Saltar filas que parecen fórmulas o notas (primer valor empieza con =)
+            primer_val = str(list(valores.values())[0] or "").strip()
+            if primer_val.startswith("="):
                 continue
+
+            # Convertir fechas Excel (datetime → string)
+            import datetime as _dt
+            for k, v in valores.items():
+                # Redondear floats que vienen de fórmulas Excel
+                if isinstance(v, float) and v == int(v):
+                    valores[k] = int(v)
+                elif isinstance(v, float):
+                    valores[k] = round(v, 2)
+                if isinstance(v, (_dt.datetime, _dt.date)):
+                    valores[k] = v.strftime("%Y-%m-%d %H:%M:%S") if isinstance(v, _dt.datetime) else v.strftime("%Y-%m-%d")
 
             placeholders = ", ".join(["%s"] * len(campos))
             cols_str = ", ".join([f"`{c}`" for c in campos])

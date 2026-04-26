@@ -491,6 +491,7 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
         "    protected static ?string $model = " + modelo + "::class;\n"
         "    protected static \\BackedEnum|string|null $navigationIcon = 'heroicon-o-table-cells';\n"
         "    protected static ?string $navigationLabel = '" + alias.replace('_',' ').title() + "';\n\n"
+        "    protected static ?string $pluralModelLabel = '" + alias.replace('_',' ').title() + "';\n\n"
         "    public static function form(Schema $schema): Schema\n"
         "    {\n"
         "        return $schema->components([\n"
