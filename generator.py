@@ -1104,22 +1104,50 @@ WORKDIR /var/www
     print(f"{'='*60}\n")
 
 
+
+
+
 # ─── CLI ──────────────────────────────────────────────────────────────────────
+
+
+def deploy_to_existing(empresa_slug: str, target: Path):
+    import tempfile
+    print(f"\n🚀 Deploy v19 → {target}\n")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_out = Path(tmp) / "out"
+        generate_project(empresa_slug, tmp_out)
+        copias = [
+            tmp_out / "app/Observers",
+            tmp_out / "app/Filament/Widgets",
+            tmp_out / "app/Filament/Pages",
+            tmp_out / "app/Providers",
+        ]
+        for src_dir in copias:
+            if not src_dir.exists():
+                continue
+            rel = src_dir.relative_to(tmp_out)
+            dst_dir = target / rel
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            for archivo in src_dir.iterdir():
+                shutil.copy2(archivo, dst_dir / archivo.name)
+                print(f"  ✅ {rel}/{archivo.name}")
+    print(f"\n✅ Deploy completo en {target}\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="KraftDo Generador v19 — Laravel + Filament con 4 capas"
     )
-    parser.add_argument(
-        "empresa",
-        help="Slug de la empresa: kraftdo | adille | extractores"
-    )
-    parser.add_argument(
-        "--output",
-        default=None,
-        help="Directorio de salida (default: ./output/{empresa}_app)"
-    )
+    parser.add_argument("empresa", help="Slug: kraftdo | adille | extractores")
+    parser.add_argument("--output", default=None, help="Directorio de salida completo")
+    parser.add_argument("--deploy", default=None, help="Deploy archivos nuevos a sistema Laravel existente")
     args = parser.parse_args()
 
-    out = Path(args.output) if args.output else Path("./output") / f"{args.empresa}_app"
-    generate_project(args.empresa, out)
+    if args.deploy:
+        deploy_to_existing(args.empresa, Path(args.deploy))
+    else:
+        out = Path(args.output) if args.output else Path("./output") / f"{args.empresa}_app"
+        generate_project(args.empresa, out)
+
+
+# ─── DEPLOY a sistema existente ──────────────────────────────────────────────
+
