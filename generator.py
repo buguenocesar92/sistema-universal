@@ -92,6 +92,120 @@ def inferir_tipo(nombre: str) -> tuple[str, str]:
     return "string", "nullable"
 
 
+# ── Reglas de cálculo automático ────────────────────────────────────────────
+# Cada regla define un campo destino, sus dependencias y la fórmula PHP.
+# El observer aplica las reglas en orden (las posteriores pueden depender
+# de campos ya calculados por reglas anteriores).
+# Se aplica una regla solo si TODOS los campos (destino + deps) existen
+# en la hoja, así nunca se rompe una tabla que no tenga el patrón.
+REGLAS_CALCULO = [
+    # Producto: costo total = insumo + mano de obra
+    {"campo": "costo_total", "deps": ["costo_insumo", "hora_trabajo"],
+     "formula": "(float)($model->costo_insumo ?? 0) + (float)($model->hora_trabajo ?? 0)",
+     "descripcion": "Suma de costo de insumo + hora de trabajo"},
+
+    # Producto: precio unitario = costo / (1 - margen 40%)
+    {"campo": "precio_unit", "deps": ["costo_total"],
+     "formula": "(float)($model->costo_total ?? 0) > 0 ? (int) round((float)$model->costo_total / 0.60) : 0",
+     "descripcion": "Precio unitario calculado con margen 40%"},
+
+    # Producto: precio mayorista = costo / (1 - margen 37%)
+    {"campo": "precio_mayor", "deps": ["costo_total"],
+     "formula": "(float)($model->costo_total ?? 0) > 0 ? (int) round((float)$model->costo_total / 0.63) : 0",
+     "descripcion": "Precio mayorista calculado con margen 37%"},
+
+    # Liquidación: valor del día = sueldo / días laborales
+    {"campo": "valor_dia", "deps": ["sueldo_base", "dias_laborales"],
+     "formula": "(float)($model->dias_laborales ?? 0) > 0 ? (int) round((float)$model->sueldo_base / (float)$model->dias_laborales) : 0",
+     "descripcion": "Valor diario del trabajador"},
+
+    # Liquidación: descuento por faltas
+    {"campo": "descuento_faltas", "deps": ["valor_dia", "faltas"],
+     "formula": "(int) round((float)($model->valor_dia ?? 0) * (float)($model->faltas ?? 0))",
+     "descripcion": "Descuento por días faltados"},
+
+    # Liquidación: monto a pagar
+    {"campo": "a_pagar", "deps": ["sueldo_base", "descuento_faltas"],
+     "formula": "(int) round((float)($model->sueldo_base ?? 0) - (float)($model->descuento_faltas ?? 0))",
+     "descripcion": "Sueldo base menos descuentos"},
+
+    # Liquidación: saldo pendiente = a pagar - quincena ya pagada
+    {"campo": "saldo", "deps": ["a_pagar", "quincena_pagada"],
+     "formula": "(int) round((float)($model->a_pagar ?? 0) - (float)($model->quincena_pagada ?? 0))",
+     "descripcion": "Saldo pendiente de pago"},
+
+    # Ventas: IVA calculado del neto
+    {"campo": "iva", "deps": ["neto"],
+     "formula": "(int) round((float)($model->neto ?? 0) * 0.19)",
+     "descripcion": "IVA 19% calculado sobre el neto"},
+
+    # Importaciones: IVA del servicio
+    {"campo": "iva_servicio", "deps": ["total_neto"],
+     "formula": "(int) round((float)($model->total_neto ?? 0) * 0.19)",
+     "descripcion": "IVA 19% sobre el total neto"},
+
+    # Promociones / ventas: total con IVA
+    {"campo": "total", "deps": ["neto"],
+     "formula": "(int) round((float)($model->neto ?? 0) * 1.19)",
+     "descripcion": "Total con IVA incluido"},
+
+    # Importaciones: total neto = costos componentes
+    {"campo": "total_neto", "deps": ["costo_china", "embarcadero", "agente_aduana"],
+     "formula": "(int) round((float)($model->costo_china ?? 0) + (float)($model->embarcadero ?? 0) + (float)($model->agente_aduana ?? 0))",
+     "descripcion": "Suma de costos de importación"},
+
+    # Stock: stock disponible = importaciones - ventas - promociones
+    {"campo": "stock_disponible", "deps": ["importacion", "ventas"],
+     "formula": "(int) ((int)($model->importacion ?? 0) - (int)($model->ventas ?? 0) - (int)($model->promociones ?? 0))",
+     "descripcion": "Stock disponible = importado - vendido - promociones"},
+
+    # Obras: total gastado = materiales + mano de obra + otros
+    {"campo": "total_gastado", "deps": ["materiales", "mano_obra"],
+     "formula": "(int) round((float)($model->materiales ?? 0) + (float)($model->mano_obra ?? 0) + (float)($model->otros ?? 0))",
+     "descripcion": "Suma de gastos de la obra"},
+
+    # Obras: resultado = cobrado - total gastado
+    {"campo": "resultado", "deps": ["cobrado", "total_gastado"],
+     "formula": "(int) round((float)($model->cobrado ?? 0) - (float)($model->total_gastado ?? 0))",
+     "descripcion": "Resultado neto de la obra"},
+
+    # Obras: margen porcentual
+    {"campo": "margen", "deps": ["cobrado", "resultado"],
+     "formula": "(float)($model->cobrado ?? 0) > 0 ? round((float)($model->resultado ?? 0) / (float)$model->cobrado, 4) : 0",
+     "descripcion": "Margen como fracción del cobrado"},
+
+    # Ventas: neto con descuento (si no hay descuento explícito, copia neto)
+    {"campo": "neto_dsto", "deps": ["neto"],
+     "formula": "(int) round((float)($model->neto ?? 0))",
+     "descripcion": "Neto con descuento (default = neto)"},
+]
+
+
+def _calculos_aplicables(cols: dict) -> list[dict]:
+    """Devuelve las reglas de cálculo cuyo campo destino + deps están en cols."""
+    nombres = set(cols.keys())
+    aplicables = []
+    for regla in REGLAS_CALCULO:
+        if regla["campo"] not in nombres:
+            continue
+        if not all(d in nombres for d in regla["deps"]):
+            continue
+        aplicables.append(regla)
+    return aplicables
+
+
+# Conjuntos para clasificar campos en widgets/formularios
+CAMPOS_MONEDA = {
+    "monto", "total", "precio_unit", "precio_mayor", "neto", "neto_dsto",
+    "cobrado", "sueldo_base", "a_pagar", "saldo", "costo_total", "costo_insumo",
+    "total_neto", "total_gastado", "ganancia", "anticipo", "ahorro", "iva",
+    "iva_servicio", "resultado", "materiales", "mano_obra", "costo_gym",
+    "costo_nogales", "gastos_generales", "monto_neto", "costo_china",
+    "embarcadero", "agente_aduana", "costo_stand", "descuento_faltas",
+    "valor_dia", "quincena_pagada",
+}
+
+
 def nombre_tabla(alias: str) -> str:
     """Convierte alias JSON a nombre de tabla Snake_case plural."""
     return alias.lower().replace("-", "_")
@@ -347,14 +461,25 @@ def gen_modelo(alias: str, cfg_hoja: dict, empresa_cfg: dict, relaciones=None, f
             if conv.get("php"):
                 accessors_str += "\n\n" + gen_accessors_php(conv["campo"], conv)
 
+    # ¿Tiene observer? (cuando hay reglas de cálculo aplicables)
+    tiene_observer = bool(_calculos_aplicables(cols))
+    observer_use   = ""
+    observer_attr  = ""
+    if tiene_observer:
+        observer_use  = (
+            "use Illuminate\\Database\\Eloquent\\Attributes\\ObservedBy;\n"
+            f"use App\\Observers\\{modelo}Observer;\n"
+        )
+        observer_attr = f"#[ObservedBy([{modelo}Observer::class])]\n"
+
     return f"""<?php
 
 namespace App\\Models;
 
 use Illuminate\\Database\\Eloquent\\Model;
 use Illuminate\\Database\\Eloquent\\Factories\\HasFactory;
-
-class {modelo} extends Model
+{observer_use}
+{observer_attr}class {modelo} extends Model
 {{
     use HasFactory;
 
@@ -367,6 +492,54 @@ class {modelo} extends Model
     protected $casts = [{casts_block}];{scope}{rels_str}{accessors_str}
 }}
 """
+
+
+def gen_observer(alias: str, cfg_hoja: dict) -> str | None:
+    """Genera un Observer PHP que recalcula campos al guardar.
+
+    Devuelve el contenido PHP, o None si la hoja no tiene reglas aplicables.
+    Usa $model SIN backslash en typehint (regla CLAUDE.md).
+    """
+    cols      = cfg_hoja.get("columnas", {})
+    aplicables = _calculos_aplicables(cols)
+    if not aplicables:
+        return None
+
+    modelo = nombre_modelo(alias)
+
+    bloques = []
+    for regla in aplicables:
+        comentario = regla.get("descripcion", "")
+        bloques.append(
+            f"        // {comentario}\n"
+            f"        $model->{regla['campo']} = {regla['formula']};"
+        )
+    body = "\n\n".join(bloques)
+
+    return (
+        "<?php\n\n"
+        "namespace App\\Observers;\n\n"
+        f"use App\\Models\\{modelo};\n\n"
+        "/**\n"
+        f" * Observer auto-generado para {modelo}.\n"
+        " * Recalcula campos derivados antes de guardar.\n"
+        " */\n"
+        f"class {modelo}Observer\n"
+        "{\n"
+        f"    public function creating({modelo} $model): void\n"
+        "    {\n"
+        "        $this->recalcular($model);\n"
+        "    }\n\n"
+        f"    public function updating({modelo} $model): void\n"
+        "    {\n"
+        "        $this->recalcular($model);\n"
+        "    }\n\n"
+        f"    protected function recalcular({modelo} $model): void\n"
+        "    {\n"
+        + body + "\n"
+        "    }\n"
+        "}\n"
+    )
 
 
 def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
@@ -382,8 +555,10 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
     ns_models = "\\App\\Models\\"
 
     # Campos del formulario
-    # Campos que nunca van en el formulario
-    CAMPOS_AUTO = {"id", "n_pedido", "saldo", "costo_total", "precio_unit", "precio_mayor", "created_at", "updated_at"}
+    # Campos que nunca van en el formulario (PKs y los calculados por observer)
+    cols_dict = cfg_hoja.get("columnas", {})
+    calc_fields = {r["campo"] for r in _calculos_aplicables(cols_dict)}
+    CAMPOS_AUTO = {"id", "n_pedido", "created_at", "updated_at"} | calc_fields
 
     form_fields = []
     for campo in cols[:10]:  # max 10 campos visibles
@@ -426,6 +601,26 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
                 "            Forms\\Components\\TextInput::make('" + campo + "')\n"
                 "                ->label('" + label + "')" + req + ","
             )
+
+    # Placeholder readonly para los campos calculados por el observer
+    placeholders = []
+    for campo in calc_fields:
+        if campo not in cols_dict:
+            continue
+        label = campo.replace("_", " ").capitalize()
+        if campo in CAMPOS_MONEDA:
+            content_expr = (
+                "$record ? '$' . number_format((float) $record->" + campo
+                + ", 0, ',', '.') : '— se calcula al guardar —'"
+            )
+        else:
+            content_expr = "$record?->" + campo + " ?? '— se calcula al guardar —'"
+        placeholders.append(
+            "            Forms\\Components\\Placeholder::make('" + campo + "')\n"
+            "                ->label('" + label + " (auto)')\n"
+            "                ->content(fn ($record) => " + content_expr + "),"
+        )
+    placeholders_str = ("\n" + "\n".join(placeholders)) if placeholders else ""
 
     form_str  = "\n".join(form_fields)
 
@@ -495,7 +690,7 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
         "    public static function form(Schema $schema): Schema\n"
         "    {\n"
         "        return $schema->components([\n"
-        + form_str + rel_fields + "\n"
+        + form_str + rel_fields + placeholders_str + "\n"
         "        ]);\n"
         "    }\n\n"
         "    public static function table(Table $table): Table\n"
@@ -530,19 +725,31 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
 
 
 def gen_form_request(alias: str, cfg_hoja: dict) -> str:
-    """Genera Laravel FormRequest con reglas de validación desde el JSON."""
+    """Genera Laravel FormRequest con reglas de validación desde el JSON.
+
+    Mejoras v19:
+      - Identificador → required (no nullable).
+      - Campos calculados por observer → no se validan (el observer los rellena).
+      - Email con max:255.
+      - `in:` para enum cuando hay estados definidos.
+    """
     modelo_n  = nombre_modelo(alias)
-    cols     = cfg_hoja.get("columnas", {})
-    estados  = cfg_hoja.get("logica", {}).get("estados", [])
+    cols      = cfg_hoja.get("columnas", {})
+    estados   = cfg_hoja.get("logica", {}).get("estados", [])
+    identif   = cfg_hoja.get("identificador")
+    calc      = {r["campo"] for r in _calculos_aplicables(cols)}
 
     reglas = []
     for campo in cols.keys():
         if campo in ("id", "numero"):
             continue
+        if campo in calc:
+            continue  # los rellena el observer
         tipo, mod = inferir_tipo(campo)
         regla_partes = []
 
-        if "nullable" not in mod:
+        es_identif = (campo == identif)
+        if es_identif or "nullable" not in mod:
             regla_partes.append("required")
         else:
             regla_partes.append("nullable")
@@ -554,8 +761,9 @@ def gen_form_request(alias: str, cfg_hoja: dict) -> str:
             regla_partes.append("date")
         elif tipo == "boolean":
             regla_partes.append("boolean")
-        elif campo == "correo" or campo == "email":
+        elif campo in ("correo", "email"):
             regla_partes.append("email")
+            regla_partes.append("max:255")
         elif campo == "estado" and estados:
             vals = ",".join(estados)
             regla_partes.append(f"in:{vals}")
@@ -758,23 +966,55 @@ def gen_api_controller(alias: str, cfg_hoja: dict) -> str:
 
 
 def gen_filament_widget(cfg: dict) -> str:
-    """Genera un widget de KPIs para el dashboard de Filament."""
+    """Genera un widget de KPIs para el dashboard de Filament.
+
+    v19: para cada hoja registros/catálogo emite:
+      - Stat de conteo (siempre).
+      - Stat de SUM del primer campo financiero detectado (si existe).
+    Los montos se formatean como CLP ($ 1.234.567).
+    """
     hojas     = cfg.get("hojas", {})
     registros = {a: h for a, h in hojas.items() if h.get("tipo") in ("registros", "catalogo")}
-    ns = "\\App\\Models\\"
+    ns        = "\\App\\Models\\"
+    moneda    = cfg.get("logica_negocios", {}).get("moneda", "CLP")
+    simbolo   = "$"
 
     stats_lines = []
-    for alias, hoja in list(registros.items())[:5]:
+    for alias, hoja in list(registros.items())[:6]:
         modelo_n = nombre_modelo(alias)
         label    = alias.replace("_", " ").title()
+        cols     = list(hoja.get("columnas", {}).keys())
+
+        # 1) Conteo
         stats_lines.append(
-            "        Stat::make('" + label + "', fn() => "
+            "            Stat::make('" + label + " — Total', fn() => "
             + ns + modelo_n + "::count())\n"
-            "            ->description('Total registros')\n"
-            "            ->color('success'),"
+            "                ->description('Registros en " + label + "')\n"
+            "                ->descriptionIcon('heroicon-m-rectangle-stack')\n"
+            "                ->color('primary'),"
         )
 
-    stats_str = "\n".join(stats_lines)
+        # 2) Sumas de campos financieros (máx 2 por hoja, evita duplicar dashboard)
+        sumas = 0
+        for campo in cols:
+            if sumas >= 2:
+                break
+            if campo not in CAMPOS_MONEDA:
+                continue
+            label_campo = campo.replace("_", " ").capitalize()
+            stats_lines.append(
+                "            Stat::make('" + label + " — " + label_campo + "', "
+                "fn() => '" + simbolo + " ' . number_format((float) "
+                + ns + modelo_n + "::sum('" + campo + "'), 0, ',', '.'))\n"
+                "                ->description('Suma " + label_campo + " (" + moneda + ")')\n"
+                "                ->descriptionIcon('heroicon-m-banknotes')\n"
+                "                ->color('success'),"
+            )
+            sumas += 1
+
+    stats_str = "\n".join(stats_lines) if stats_lines else (
+        "            Stat::make('Sin datos', '0')->color('gray'),"
+    )
     ns_w = "Filament\\Widgets"
 
     return (
@@ -784,6 +1024,7 @@ def gen_filament_widget(cfg: dict) -> str:
         "use " + ns_w + "\\StatsOverviewWidget\\Stat;\n\n"
         "class KraftDoStatsWidget extends BaseWidget\n"
         "{\n"
+        "    protected ?string $heading = 'Indicadores generales';\n\n"
         "    protected function getStats(): array\n"
         "    {\n"
         "        return [\n"
@@ -1040,6 +1281,17 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
             archivos[nombre_arch] = gen_filament_resource(alias, cfg_hoja, cfg, rels)
             print(f"  🎛️  {nombre_arch}")
 
+    # 3a-bis. Observers (campos calculados auto al guardar)
+    if not solo or solo in ("modelos", "observers"):
+        for alias, cfg_hoja in hojas_generables.items():
+            obs = gen_observer(alias, cfg_hoja)
+            if obs is None:
+                continue
+            modelo_n = nombre_modelo(alias)
+            nombre_arch = f"app/Observers/{modelo_n}Observer.php"
+            archivos[nombre_arch] = obs
+            print(f"  👁️  {nombre_arch}")
+
     # 3b. FormRequests
     if not solo or solo in ("modelos", "requests"):
         for alias, cfg_hoja in hojas_generables.items():
@@ -1178,7 +1430,9 @@ if __name__ == "__main__":
     parser.add_argument("empresa", help="Nombre de la empresa (ej: kraftdo)")
     parser.add_argument("--output", default="./laravel_output", help="Directorio de salida")
     parser.add_argument("--preview", action="store_true", help="Mostrar sin escribir")
-    parser.add_argument("--solo", choices=["migraciones", "modelos", "filament", "api", "pages", "seeders", "requests"],
+    parser.add_argument("--solo",
+                        choices=["migraciones", "modelos", "filament", "api",
+                                 "pages", "seeders", "requests", "observers", "widgets"],
                         help="Generar solo una capa")
     args = parser.parse_args()
 
