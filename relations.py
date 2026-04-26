@@ -17,8 +17,22 @@ def tabla(alias: str) -> str:
 
 
 def modelo(alias: str) -> str:
+    """Convierte alias a PascalCase singular (mismas reglas que generator.nombre_modelo)."""
     palabras = re.split(r'[_\-\s]+', alias)
-    singular = palabras[-1].rstrip("s")
+    ult = palabras[-1].lower()
+    if ult.endswith("ores"):   singular = ult[:-2]
+    elif ult.endswith("ales"): singular = ult[:-2]
+    elif ult.endswith("iones"): singular = ult[:-2]
+    elif ult.endswith("entes"): singular = ult[:-1]
+    elif ult.endswith("tes"):  singular = ult[:-1]
+    elif ult.endswith("enes"): singular = ult[:-2]
+    elif ult.endswith("res"):  singular = ult[:-2]
+    elif ult.endswith("nes"):  singular = ult[:-1]
+    elif ult.endswith("as"):   singular = ult[:-1]
+    elif ult.endswith("os"):   singular = ult[:-1]
+    elif ult.endswith("es") and len(ult) > 4: singular = ult[:-1]
+    elif ult.endswith("s"):    singular = ult[:-1]
+    else: singular = ult
     return "".join(w.capitalize() for w in palabras[:-1]) + singular.capitalize()
 
 

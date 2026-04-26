@@ -202,8 +202,94 @@ CAMPOS_MONEDA = {
     "iva_servicio", "resultado", "materiales", "mano_obra", "costo_gym",
     "costo_nogales", "gastos_generales", "monto_neto", "costo_china",
     "embarcadero", "agente_aduana", "costo_stand", "descuento_faltas",
-    "valor_dia", "quincena_pagada",
+    "valor_dia", "quincena_pagada", "precio",
 }
+
+# Campos que típicamente NO son enums aunque sean strings cortos
+NO_ENUM = {
+    "nombre", "descripcion", "obs", "observaciones", "detalle", "comentario",
+    "comment", "trabajador", "cliente", "producto", "sku",
+    "codigo", "factura", "rut", "empresa", "evento", "lugar", "vehiculo",
+    "concepto", "responsable", "contacto", "obra", "item", "variante",
+    "ciudad", "whatsapp", "correo", "email", "telefono", "fecha", "url",
+    "web", "sitio_web", "link", "ref_pedido", "proveedor", "modelo",
+    "aplicaciones", "problema", "f_entrega",
+}
+
+
+def _detectar_enums_excel(excel_path: str, cfg: dict) -> dict:
+    """Lee el Excel y detecta columnas string con 2..7 valores únicos como enum.
+
+    Devuelve {alias: {campo: [val1, val2, ...]}}.
+    Saltea identificadores y campos en NO_ENUM (nombres, textos abiertos, etc).
+    """
+    if not os.path.exists(excel_path):
+        return {}
+    try:
+        import openpyxl
+        from openpyxl.utils import column_index_from_string
+    except ImportError:
+        return {}
+    try:
+        wb = openpyxl.load_workbook(excel_path, data_only=True, read_only=True)
+    except Exception:
+        return {}
+
+    resultado = {}
+    for alias, hoja_cfg in cfg.get("hojas", {}).items():
+        if hoja_cfg.get("tipo") not in ("registros", "catalogo"):
+            continue
+        nombre_hoja = hoja_cfg.get("nombre")
+        if nombre_hoja not in wb.sheetnames:
+            continue
+        ws = wb[nombre_hoja]
+        fila_inicio = hoja_cfg.get("fila_datos", 2)
+        ident       = hoja_cfg.get("identificador")
+        enums_hoja  = {}
+
+        for campo, letra in hoja_cfg.get("columnas", {}).items():
+            if campo == ident or campo in NO_ENUM or campo in CAMPOS_MONEDA:
+                continue
+            tipo, _ = inferir_tipo(campo)
+            # Sólo strings (los enums numéricos son raros)
+            if tipo != "string" and not tipo.startswith("string"):
+                continue
+
+            try:
+                col_idx = column_index_from_string(letra)
+            except Exception:
+                continue
+
+            valores = set()
+            descartar = False
+            try:
+                fin = min(ws.max_row or fila_inicio, fila_inicio + 300)
+                for row in ws.iter_rows(min_row=fila_inicio, max_row=fin,
+                                         min_col=col_idx, max_col=col_idx,
+                                         values_only=True):
+                    v = row[0]
+                    if v is None:
+                        continue
+                    s = str(v).strip()
+                    if not s:
+                        continue
+                    if len(s) > 60:
+                        descartar = True
+                        break
+                    valores.add(s)
+                    if len(valores) > 8:
+                        descartar = True
+                        break
+            except Exception:
+                descartar = True
+            if descartar:
+                continue
+            if 2 <= len(valores) <= 7:
+                enums_hoja[campo] = sorted(valores)
+
+        if enums_hoja:
+            resultado[alias] = enums_hoja
+    return resultado
 
 
 def nombre_tabla(alias: str) -> str:
@@ -543,13 +629,21 @@ def gen_observer(alias: str, cfg_hoja: dict) -> str | None:
 
 
 def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
-                           relaciones=None) -> str:
-    """Genera un Filament Resource completo con ExcelExport incluido."""
+                           relaciones=None, enums=None) -> str:
+    """Genera un Filament Resource completo con ExcelExport incluido.
+
+    enums: {campo: [val1, val2, ...]} para esta hoja (si se detectaron en Excel).
+    relaciones: lista global de relaciones detectadas por relations.detectar_relaciones.
+    """
     modelo   = nombre_modelo(alias)
     resource = modelo + "Resource"
     cols     = list(cfg_hoja.get("columnas", {}).keys())
     tipo     = cfg_hoja.get("tipo", "registros")
     estados  = cfg_hoja.get("logica", {}).get("estados", [])
+    enums    = enums or {}
+    tabla_n  = nombre_tabla(alias)
+    rels_hoja = [r for r in (relaciones or []) if r["tabla_origen"] == tabla_n]
+    rels_por_campo = {r["campo_origen"]: r for r in rels_hoja}
 
     ns = "\\App\\Filament\\Resources\\"
     ns_models = "\\App\\Models\\"
@@ -568,6 +662,7 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
         label  = campo.replace("_", " ").capitalize()
         req    = ""  # Filament 4: nullable/required se maneja en validación
 
+        # Prioridad 1: estado con valores definidos en el JSON
         if campo == "estado" and estados:
             opts = "\n".join(
                 "                    '" + _slug(e) + "' => '" + e + "',"
@@ -579,6 +674,41 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
                 "                ->options([\n"
                 + opts + "\n"
                 "                ])" + req + ","
+            )
+        # Prioridad 2: relación detectada → Select con opciones del modelo
+        elif campo in rels_por_campo:
+            rel = rels_por_campo[campo]
+            modelo_dest = rel["modelo_destino"]
+            campo_dest  = rel["campo_destino"]
+            form_fields.append(
+                "            Forms\\Components\\Select::make('" + campo + "')\n"
+                "                ->label('" + label + "')\n"
+                "                ->options(fn() => \\App\\Models\\" + modelo_dest
+                + "::query()->pluck('" + campo_dest + "', '" + campo_dest + "')->toArray())\n"
+                "                ->searchable()\n"
+                "                ->preload()"
+                + req + ","
+            )
+        # Prioridad 3: enum auto-detectado en Excel
+        elif campo in enums:
+            opts_lines = "\n".join(
+                "                    '" + v.replace("'", "\\'") + "' => '" + v.replace("'", "\\'") + "',"
+                for v in enums[campo]
+            )
+            form_fields.append(
+                "            Forms\\Components\\Select::make('" + campo + "')\n"
+                "                ->label('" + label + "')\n"
+                "                ->options([\n"
+                + opts_lines + "\n"
+                "                ])" + req + ","
+            )
+        # Prioridad alta: campo monetario → numeric con prefix $
+        elif campo in CAMPOS_MONEDA:
+            form_fields.append(
+                "            Forms\\Components\\TextInput::make('" + campo + "')\n"
+                "                ->label('" + label + "')\n"
+                "                ->numeric()\n"
+                "                ->prefix('$')" + req + ","
             )
         elif t == "text":
             form_fields.append(
@@ -594,7 +724,9 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
         elif t == "timestamp":
             form_fields.append(
                 "            Forms\\Components\\DatePicker::make('" + campo + "')\n"
-                "                ->label('" + label + "')" + req + ","
+                "                ->label('" + label + "')\n"
+                "                ->displayFormat('d/m/Y')\n"
+                "                ->native(false)" + req + ","
             )
         else:
             form_fields.append(
@@ -628,16 +760,43 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
     table_cols = []
     for campo in cols[:8]:
         t, _ = inferir_tipo(campo)
-        if t.startswith("decimal") or t == "integer":
+        label_c = campo.replace('_', ' ').capitalize()
+        # Monetario → money() con formato CLP
+        if campo in CAMPOS_MONEDA:
             table_cols.append(
                 "                Tables\\Columns\\TextColumn::make('" + campo + "')\n"
-                "                    ->label('" + campo.replace('_',' ').capitalize() + "')\n"
-                "                    ->numeric()->sortable()->searchable(),"
+                "                    ->label('" + label_c + "')\n"
+                "                    ->money('clp', divideBy: 1, locale: 'es_CL')\n"
+                "                    ->sortable(),"
+            )
+        # Fecha → format d/m/Y
+        elif t == "timestamp":
+            table_cols.append(
+                "                Tables\\Columns\\TextColumn::make('" + campo + "')\n"
+                "                    ->label('" + label_c + "')\n"
+                "                    ->date('d/m/Y')\n"
+                "                    ->sortable(),"
+            )
+        # Numérico no monetario
+        elif t.startswith("decimal") or t == "integer":
+            table_cols.append(
+                "                Tables\\Columns\\TextColumn::make('" + campo + "')\n"
+                "                    ->label('" + label_c + "')\n"
+                "                    ->numeric(thousandsSeparator: '.')\n"
+                "                    ->sortable()->searchable(),"
+            )
+        # Badge para enums detectados o estado
+        elif campo in enums or (campo == "estado" and estados):
+            table_cols.append(
+                "                Tables\\Columns\\TextColumn::make('" + campo + "')\n"
+                "                    ->label('" + label_c + "')\n"
+                "                    ->badge()\n"
+                "                    ->sortable()->searchable(),"
             )
         else:
             table_cols.append(
                 "                Tables\\Columns\\TextColumn::make('" + campo + "')\n"
-                "                    ->label('" + campo.replace('_',' ').capitalize() + "')\n"
+                "                    ->label('" + label_c + "')\n"
                 "                    ->sortable()->searchable(),"
             )
 
@@ -724,7 +883,7 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
     )
 
 
-def gen_form_request(alias: str, cfg_hoja: dict) -> str:
+def gen_form_request(alias: str, cfg_hoja: dict, enums: dict | None = None) -> str:
     """Genera Laravel FormRequest con reglas de validación desde el JSON.
 
     Mejoras v19:
@@ -732,12 +891,15 @@ def gen_form_request(alias: str, cfg_hoja: dict) -> str:
       - Campos calculados por observer → no se validan (el observer los rellena).
       - Email con max:255.
       - `in:` para enum cuando hay estados definidos.
+    Mejoras v20:
+      - Enum auto-detectado del Excel → `in:val1,val2,...`
     """
     modelo_n  = nombre_modelo(alias)
     cols      = cfg_hoja.get("columnas", {})
     estados   = cfg_hoja.get("logica", {}).get("estados", [])
     identif   = cfg_hoja.get("identificador")
     calc      = {r["campo"] for r in _calculos_aplicables(cols)}
+    enums     = enums or {}
 
     reglas = []
     for campo in cols.keys():
@@ -766,6 +928,10 @@ def gen_form_request(alias: str, cfg_hoja: dict) -> str:
             regla_partes.append("max:255")
         elif campo == "estado" and estados:
             vals = ",".join(estados)
+            regla_partes.append(f"in:{vals}")
+        elif campo in enums:
+            # Comas dentro de valores se escapan (Laravel separa con comas)
+            vals = ",".join(v.replace(",", "\\,") for v in enums[campo])
             regla_partes.append(f"in:{vals}")
         else:
             regla_partes.append("string")
@@ -1035,6 +1201,46 @@ def gen_filament_widget(cfg: dict) -> str:
     )
 
 
+def gen_recalcular_command(modelos_observers: list[str]) -> str:
+    """Genera app/Console/Commands/RecalcularTodo.php que llama save() en cada
+    registro de los modelos con observer, forzando recálculo de campos derivados."""
+    if not modelos_observers:
+        modelos_observers = []
+    lineas = ",\n".join(
+        "            \\App\\Models\\" + m + "::class"
+        for m in modelos_observers
+    )
+    return (
+        "<?php\n\n"
+        "namespace App\\Console\\Commands;\n\n"
+        "use Illuminate\\Console\\Command;\n\n"
+        "class RecalcularTodo extends Command\n"
+        "{\n"
+        "    protected $signature = 'kraftdo:recalcular';\n"
+        "    protected $description = 'Recalcula todos los campos derivados llamando save() en cada registro';\n\n"
+        "    public function handle(): int\n"
+        "    {\n"
+        "        $modelos = [\n"
+        + lineas + "\n"
+        "        ];\n\n"
+        "        foreach ($modelos as $clase) {\n"
+        "            if (!class_exists($clase)) {\n"
+        "                continue;\n"
+        "            }\n"
+        "            $count = 0;\n"
+        "            $clase::query()->lazy()->each(function ($r) use (&$count) {\n"
+        "                $r->save();\n"
+        "                $count++;\n"
+        "            });\n"
+        "            $this->info(\"  {$clase}: {$count} registros recalculados\");\n"
+        "        }\n\n"
+        "        $this->info('✅ Recalculo completo.');\n"
+        "        return self::SUCCESS;\n"
+        "    }\n"
+        "}\n"
+    )
+
+
 def gen_install_script(empresa: str, hojas: dict) -> str:
     modelos = [nombre_modelo(a) for a, h in hojas.items()
                if h.get("tipo") in ("catalogo", "registros")]
@@ -1073,7 +1279,10 @@ def gen_install_script(empresa: str, hojas: dict) -> str:
         "# 5. Compilar assets\n"
         "npm install && npm run build\n"
         'echo "✅ Assets compilados"\n\n'
-        "# 6. Crear usuario admin\n"
+        "# 6. Recalcular campos derivados (observers se ejecutan al save)\n"
+        "php artisan kraftdo:recalcular || true\n"
+        'echo "✅ Campos derivados recalculados"\n\n'
+        "# 7. Crear usuario admin\n"
         "php artisan make:filament-user\n"
         'echo "✅ Listo! Abre /admin en tu navegador"\n'
     )
@@ -1266,6 +1475,17 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
     gen_modelo._relaciones = rels
     gen_modelo._formulas   = formulas_all
 
+    # Detectar enums leyendo el Excel (string columns con pocos valores únicos)
+    enums_por_hoja = _detectar_enums_excel(excel_path, cfg)
+    if enums_por_hoja:
+        n = sum(len(e) for e in enums_por_hoja.values())
+        print(f"  🔠 {n} columnas detectadas como enum auto:")
+        for a, e in enums_por_hoja.items():
+            for campo, vals in e.items():
+                muestra = ", ".join(vals[:4]) + (" …" if len(vals) > 4 else "")
+                print(f"     {a}.{campo} = [{muestra}]")
+        print()
+
     if not solo or solo == "modelos":
         for alias, cfg_hoja in hojas_generables.items():
             modelo_n = nombre_modelo(alias)
@@ -1278,10 +1498,13 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
         for alias, cfg_hoja in hojas_generables.items():
             modelo = nombre_modelo(alias)
             nombre_arch = f"app/Filament/Resources/{modelo}Resource.php"
-            archivos[nombre_arch] = gen_filament_resource(alias, cfg_hoja, cfg, rels)
+            archivos[nombre_arch] = gen_filament_resource(
+                alias, cfg_hoja, cfg, rels, enums_por_hoja.get(alias, {})
+            )
             print(f"  🎛️  {nombre_arch}")
 
     # 3a-bis. Observers (campos calculados auto al guardar)
+    modelos_con_observer = []
     if not solo or solo in ("modelos", "observers"):
         for alias, cfg_hoja in hojas_generables.items():
             obs = gen_observer(alias, cfg_hoja)
@@ -1290,14 +1513,23 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
             modelo_n = nombre_modelo(alias)
             nombre_arch = f"app/Observers/{modelo_n}Observer.php"
             archivos[nombre_arch] = obs
+            modelos_con_observer.append(modelo_n)
             print(f"  👁️  {nombre_arch}")
+
+    # 3a-ter. Comando artisan kraftdo:recalcular
+    if (not solo or solo in ("modelos", "observers")) and modelos_con_observer:
+        nombre_arch = "app/Console/Commands/RecalcularTodo.php"
+        archivos[nombre_arch] = gen_recalcular_command(modelos_con_observer)
+        print(f"  🔁 {nombre_arch}")
 
     # 3b. FormRequests
     if not solo or solo in ("modelos", "requests"):
         for alias, cfg_hoja in hojas_generables.items():
             modelo_n = nombre_modelo(alias)
             nombre_arch = f"app/Http/Requests/{modelo_n}Request.php"
-            archivos[nombre_arch] = gen_form_request(alias, cfg_hoja)
+            archivos[nombre_arch] = gen_form_request(
+                alias, cfg_hoja, enums_por_hoja.get(alias, {})
+            )
             print(f"  ✅ {nombre_arch}")
 
     # 3c. Seeders
@@ -1412,6 +1644,18 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
             print(r.stdout)
             if r.returncode != 0:
                 print(f"  ⚠️  {r.stderr[:200]}")
+
+        # Recalcular campos derivados (observers se ejecutan en save())
+        print("\n🔁 Recalculando campos derivados...")
+        r = subprocess.run(
+            ["php", "artisan", "kraftdo:recalcular"],
+            cwd=output_dir, capture_output=True, text=True
+        )
+        if r.returncode == 0:
+            for line in r.stdout.strip().splitlines()[-6:]:
+                print(line)
+        else:
+            print(f"  ⚠️  {r.stderr[:200]}")
 
         # Puerto único por empresa basado en hash del nombre
         import hashlib
