@@ -100,7 +100,20 @@ def nombre_tabla(alias: str) -> str:
 def nombre_modelo(alias: str) -> str:
     """Convierte alias JSON a nombre de clase PascalCase singular."""
     palabras = re.split(r'[_\-\s]+', alias)
-    singular = palabras[-1].rstrip("s")  # naïve singularización
+    ult = palabras[-1].lower()
+    if ult.endswith("ores"):   singular = ult[:-2]
+    elif ult.endswith("ales"): singular = ult[:-2]
+    elif ult.endswith("iones"): singular = ult[:-2]
+    elif ult.endswith("entes"): singular = ult[:-1]
+    elif ult.endswith("tes"):  singular = ult[:-1]
+    elif ult.endswith("enes"): singular = ult[:-2]
+    elif ult.endswith("res"):  singular = ult[:-2]
+    elif ult.endswith("nes"):  singular = ult[:-1]
+    elif ult.endswith("as"):   singular = ult[:-1]
+    elif ult.endswith("os"):   singular = ult[:-1]
+    elif ult.endswith("es") and len(ult) > 4: singular = ult[:-1]
+    elif ult.endswith("s"):    singular = ult[:-1]
+    else: singular = ult
     return "".join(w.capitalize() for w in palabras[:-1]) + singular.capitalize()
 
 
@@ -369,8 +382,13 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
     ns_models = "\\App\\Models\\"
 
     # Campos del formulario
+    # Campos que nunca van en el formulario
+    CAMPOS_AUTO = {"id", "n_pedido", "saldo", "costo_total", "precio_unit", "precio_mayor", "created_at", "updated_at"}
+
     form_fields = []
     for campo in cols[:10]:  # max 10 campos visibles
+        if campo in CAMPOS_AUTO:
+            continue
         t, mod = inferir_tipo(campo)
         label  = campo.replace("_", " ").capitalize()
         req    = ""  # Filament 4: nullable/required se maneja en validación
@@ -442,8 +460,8 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
     export_action = ""
 
     # Relaciones como Select en el formulario
-    rel_fields = ""
-    if RELACIONES_OK and relaciones:
+    rel_fields = ""  # desactivado — relaciones en formularios requieren modelos con relationship() definido
+    if False and RELACIONES_OK and relaciones:
         from relations import gen_filament_select
         tabla_n = nombre_tabla(alias)
         rels_hoja = [r for r in relaciones if r["tabla_origen"] == tabla_n]
@@ -451,7 +469,6 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
             campo = rel["campo_origen"]
             if campo not in cols:
                 continue
-            # Reemplazar el TextInput por Select con relación
             rel_fields += (
                 "\n            Forms\\Components\\Select::make('" + campo + "')\n"
                 "                ->label('" + campo.replace('_',' ').capitalize() + "')\n"
