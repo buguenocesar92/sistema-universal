@@ -1,0 +1,193 @@
+"""
+Configuración Extractores Chile Ltda
+Fuente: Control_de_Extractores_Chile_Marzo_2026.xlsx
+"""
+
+CONFIG = {
+    "nombre_empresa": "Extractores Chile Ltda",
+    "slug": "extractores",
+    "color_filament": "sky",
+
+    "tablas": {
+
+        "productos": {
+            "label": "Productos (Modelos)",
+            "label_singular": "Producto",
+            "primary_key": "modelo",
+            "primary_key_type": "string",
+            "columnas_tabla": ["modelo", "sku", "precio_clp_iva", "panel_w", "cobertura_m2", "motor", "garantia"],
+            "campos": {
+                "modelo":        {"tipo": "string",  "editable": True,  "label": "Modelo",           "rules": "required|max:30|unique:productos,modelo"},
+                "sku":           {"tipo": "string",  "editable": True,  "label": "SKU",              "rules": "required|max:30"},
+                "precio_clp_iva":{"tipo": "integer", "editable": True,  "label": "Precio CLP+IVA",   "rules": "required|integer|min:0"},
+                "precio_neto":   {"tipo": "integer", "editable": False, "label": "Precio neto [AUTO]","auto": True},
+                "panel_w":       {"tipo": "string",  "editable": True,  "label": "Panel (W)"},
+                "flujo_aire":    {"tipo": "string",  "editable": True,  "label": "Flujo aire"},
+                "cobertura_m2":  {"tipo": "string",  "editable": True,  "label": "Cobertura m²"},
+                "motor":         {"tipo": "string",  "editable": True,  "label": "Motor"},
+                "garantia":      {"tipo": "string",  "editable": True,  "label": "Garantía"},
+                "aplicaciones":  {"tipo": "text",    "editable": True,  "label": "Aplicaciones"},
+            },
+            "observer_formulas": {
+                "precio_neto": r"(int)round($model->precio_clp_iva / 1.19)",
+            },
+        },
+
+        "stock": {
+            "label": "Control de Stock",
+            "label_singular": "Stock",
+            "primary_key": "id",
+            "primary_key_type": "bigint",
+            "columnas_tabla": ["modelo", "importacion_und", "ventas_und", "promociones_und", "stock_disponible"],
+            "campos": {
+                "modelo":          {"tipo": "string",  "editable": True,  "label": "Modelo",         "rules": "required|max:30"},
+                "importacion_und": {"tipo": "integer", "editable": True,  "label": "Importación (und)","rules": "required|integer|min:0"},
+                "ventas_und":      {"tipo": "integer", "editable": False, "label": "Ventas (und) [AUTO]",       "auto": True},
+                "promociones_und": {"tipo": "integer", "editable": False, "label": "Promociones (und) [AUTO]",  "auto": True},
+                "stock_disponible":{"tipo": "integer", "editable": False, "label": "Stock disponible [AUTO]",   "auto": True},
+            },
+            "observer_formulas": {
+                "ventas_und":      r"\App\Models\Venta::where('modelo', $model->modelo)->sum('cantidad')",
+                "promociones_und": r"\App\Models\Promocion::where('modelo', $model->modelo)->sum('cantidad')",
+                "stock_disponible":r"($model->importacion_und ?? 0) - ($model->ventas_und ?? 0) - ($model->promociones_und ?? 0)",
+            },
+        },
+
+        "ventas": {
+            "label": "Control de Ventas",
+            "label_singular": "Venta",
+            "primary_key": "id",
+            "primary_key_type": "bigint",
+            "columnas_tabla": ["contacto", "empresa", "modelo", "cantidad", "neto", "iva", "total", "fecha"],
+            "campos": {
+                "contacto":      {"tipo": "string",  "editable": True,  "label": "Contacto",         "rules": "required|max:100"},
+                "empresa":       {"tipo": "string",  "editable": True,  "label": "Empresa",          "rules": "required|max:100"},
+                "rut":           {"tipo": "string",  "editable": True,  "label": "RUT"},
+                "tipo_estructura":{"tipo":"string",  "editable": True,  "label": "Tipo estructura"},
+                "factura":       {"tipo": "string",  "editable": True,  "label": "N° Factura"},
+                "fecha":         {"tipo": "date",    "editable": True,  "label": "Fecha",            "rules": "required|date"},
+                "codigo":        {"tipo": "string",  "editable": True,  "label": "Código"},
+                "modelo":        {"tipo": "string",  "editable": True,  "label": "Modelo",           "rules": "required"},
+                "cantidad":      {"tipo": "integer", "editable": True,  "label": "Cantidad",         "rules": "required|integer|min:1"},
+                "neto":          {"tipo": "integer", "editable": True,  "label": "Neto ($)",         "rules": "required|integer|min:0"},
+                "iva":           {"tipo": "integer", "editable": False, "label": "IVA ($) [AUTO]",   "auto": True},
+                "total":         {"tipo": "integer", "editable": False, "label": "Total ($) [AUTO]", "auto": True},
+                "estado":        {"tipo": "enum",    "editable": True,  "label": "Estado",
+                                  "opciones": ["Pendiente", "Pagada", "Anulada"],
+                                  "rules": "required|in:Pendiente,Pagada,Anulada"},
+            },
+            "observer_formulas": {
+                "iva":   r"(int)round($model->neto * 0.19)",
+                "total": r"($model->neto ?? 0) + ($model->iva ?? 0)",
+            },
+        },
+
+        "importaciones": {
+            "label": "Control de Importación",
+            "label_singular": "Importación",
+            "primary_key": "id",
+            "primary_key_type": "bigint",
+            "columnas_tabla": ["modelo", "unidades", "pi_numero", "empresa", "costo_china", "total_neto", "total"],
+            "campos": {
+                "modelo":          {"tipo": "string",  "editable": True,  "label": "Modelo",           "rules": "required|max:30"},
+                "unidades":        {"tipo": "integer", "editable": True,  "label": "Unidades",         "rules": "required|integer|min:1"},
+                "pi_numero":       {"tipo": "string",  "editable": True,  "label": "P/I N°",           "rules": "required|max:50"},
+                "empresa":         {"tipo": "string",  "editable": True,  "label": "Empresa proveedor"},
+                "rut":             {"tipo": "string",  "editable": True,  "label": "RUT proveedor"},
+                "factura":         {"tipo": "string",  "editable": True,  "label": "N° Factura"},
+                "costo_china":     {"tipo": "integer", "editable": True,  "label": "Costo China ($)",  "rules": "required|integer|min:0"},
+                "embarcadero":     {"tipo": "integer", "editable": True,  "label": "Embarcadero ($)"},
+                "agente_aduana":   {"tipo": "integer", "editable": True,  "label": "Agente aduana ($)"},
+                "total_neto":      {"tipo": "integer", "editable": False, "label": "Total neto ($) [AUTO]", "auto": True},
+                "iva_embarcadero": {"tipo": "integer", "editable": False, "label": "IVA embarcadero [AUTO]","auto": True},
+                "iva_aduanero":    {"tipo": "integer", "editable": False, "label": "IVA aduanero [AUTO]",   "auto": True},
+                "total_iva":       {"tipo": "integer", "editable": False, "label": "Total IVA [AUTO]",      "auto": True},
+                "total":           {"tipo": "integer", "editable": False, "label": "TOTAL ($) [AUTO]",      "auto": True},
+                "costo_unit_import":{"tipo":"integer", "editable": False, "label": "Costo unit. importado [AUTO]", "auto": True},
+            },
+            "observer_formulas": {
+                "total_neto":       r"($model->costo_china ?? 0) + ($model->embarcadero ?? 0) + ($model->agente_aduana ?? 0)",
+                "iva_embarcadero":  r"(int)round(($model->embarcadero ?? 0) * 0.19)",
+                "iva_aduanero":     r"(int)round(($model->agente_aduana ?? 0) * 0.19)",
+                "total_iva":        r"($model->iva_embarcadero ?? 0) + ($model->iva_aduanero ?? 0)",
+                "total":            r"($model->total_neto ?? 0) + ($model->total_iva ?? 0)",
+                "costo_unit_import":r"($model->unidades > 0) ? (int)round($model->total / $model->unidades) : 0",
+            },
+        },
+
+        "promociones": {
+            "label": "Control de Promociones",
+            "label_singular": "Promoción",
+            "primary_key": "id",
+            "primary_key_type": "bigint",
+            "columnas_tabla": ["contacto", "empresa", "modelo", "cantidad", "neto", "iva", "total"],
+            "campos": {
+                "contacto":  {"tipo": "string",  "editable": True,  "label": "Contacto",  "rules": "required|max:100"},
+                "empresa":   {"tipo": "string",  "editable": True,  "label": "Empresa"},
+                "rut":       {"tipo": "string",  "editable": True,  "label": "RUT"},
+                "modelo":    {"tipo": "string",  "editable": True,  "label": "Modelo",    "rules": "required"},
+                "cantidad":  {"tipo": "integer", "editable": True,  "label": "Cantidad",  "rules": "required|integer|min:1"},
+                "neto":      {"tipo": "integer", "editable": True,  "label": "Neto ($)",  "rules": "required|integer|min:0"},
+                "iva":       {"tipo": "integer", "editable": False, "label": "IVA [AUTO]","auto": True},
+                "total":     {"tipo": "integer", "editable": False, "label": "Total [AUTO]","auto": True},
+                "fecha":     {"tipo": "date",    "editable": True,  "label": "Fecha"},
+                "notas":     {"tipo": "text",    "editable": True,  "label": "Notas"},
+            },
+            "observer_formulas": {
+                "iva":   r"(int)round($model->neto * 0.19)",
+                "total": r"($model->neto ?? 0) + ($model->iva ?? 0)",
+            },
+        },
+    },
+
+    "kpis": [
+        {
+            "id": "stock_total",
+            "label": "Stock total",
+            "descripcion": "Unidades disponibles en bodega",
+            "icono": "heroicon-o-archive-box",
+            "color": "primary",
+            "query": r"\App\Models\Stock::sum('stock_disponible').' unidades'",
+        },
+        {
+            "id": "ventas_mes",
+            "label": "Ventas del mes",
+            "descripcion": "Total neto facturado este mes",
+            "icono": "heroicon-o-banknotes",
+            "color": "success",
+            "query": r"'$'.number_format(\App\Models\Venta::whereMonth('fecha', now()->month)->sum('total'), 0, ',', '.')",
+        },
+        {
+            "id": "unidades_vendidas",
+            "label": "Unidades vendidas",
+            "descripcion": "Extractores vendidos este mes",
+            "icono": "heroicon-o-shopping-cart",
+            "color": "info",
+            "query": r"\App\Models\Venta::whereMonth('fecha', now()->month)->sum('cantidad').' unidades'",
+        },
+        {
+            "id": "inversion_importacion",
+            "label": "Inversión importaciones",
+            "descripcion": "Total invertido en importaciones",
+            "icono": "heroicon-o-globe-alt",
+            "color": "warning",
+            "query": r"'$'.number_format(\App\Models\Importacion::sum('total'), 0, ',', '.')",
+        },
+        {
+            "id": "costo_unit_promedio",
+            "label": "Costo unit. promedio",
+            "descripcion": "Costo promedio por unidad importada",
+            "icono": "heroicon-o-calculator",
+            "color": "info",
+            "query": r"'$'.number_format(\App\Models\Importacion::avg('costo_unit_import') ?? 0, 0, ',', '.')",
+        },
+        {
+            "id": "ventas_por_modelo",
+            "label": "Modelo más vendido",
+            "descripcion": "Modelo con más unidades vendidas",
+            "icono": "heroicon-o-star",
+            "color": "success",
+            "query": r"optional(\App\Models\Venta::select('modelo', \Illuminate\Support\Facades\DB::raw('SUM(cantidad) as total_und'))->groupBy('modelo')->orderByDesc('total_und')->first())->modelo ?? 'Sin datos'",
+        },
+    ],
+}
