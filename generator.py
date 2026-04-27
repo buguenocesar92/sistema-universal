@@ -1775,6 +1775,93 @@ def gen_filament_widget(cfg: dict) -> str:
     )
 
 
+def gen_widgets(cfg: dict) -> dict:
+    """Genera múltiples Widgets de Filament basados en el bloque 'dashboard' del JSON.
+
+    Estructura JSON esperada:
+    \"dashboard\": [
+      {
+        \"nombre\": \"ResumenVentas\",
+        \"titulo\": \"Ventas del Mes\",
+        \"stats\": [
+          { \"label\": \"Total CLP\", \"modelo\": \"Venta\", \"fn\": \"sum:total\", \"color\": \"success\" },
+          { \"label\": \"Pedidos\", \"modelo\": \"Venta\", \"fn\": \"count\" }
+        ]
+      }
+    ]
+    """
+    dashboard_cfg = cfg.get("dashboard", [])
+    if not dashboard_cfg:
+        return {}
+
+    archivos = {}
+    ns_models = "\\App\\Models\\"
+    ns_widgets = "App\\Filament\\Widgets"
+
+    for d in dashboard_cfg:
+        nombre_clase = d.get("nombre", "CustomDashboardWidget")
+        titulo = d.get("titulo", "Dashboard")
+        stats_cfg = d.get("stats", [])
+
+        stats_lines = []
+        for s in stats_cfg:
+            label = s.get("label", "Stat")
+            modelo = s.get("modelo")
+            fn = s.get("fn", "count")
+            color = s.get("color", "primary")
+            icon = s.get("icon", "heroicon-m-chart-bar")
+
+            if not modelo:
+                continue
+
+            if fn == "count":
+                expr = f"{ns_models}{modelo}::count()"
+            elif fn.startswith("sum:"):
+                campo = fn.split(":")[1]
+                expr = f"(float) {ns_models}{modelo}::sum('{campo}')"
+            elif fn.startswith("avg:"):
+                campo = fn.split(":")[1]
+                expr = f"(float) {ns_models}{modelo}::avg('{campo}')"
+            else:
+                expr = "0"
+
+            # Formateo si parece dinero
+            if "total" in fn or "precio" in fn or "costo" in fn or "monto" in fn:
+                value_php = f"'$ ' . number_format({expr}, 0, ',', '.')"
+            else:
+                value_php = f"number_format({expr}, 0, ',', '.')"
+
+            stats_lines.append(
+                f"            Stat::make('{label}', fn() => {value_php})\n"
+                f"                ->descriptionIcon('{icon}')\n"
+                f"                ->color('{color}'),"
+            )
+
+        stats_str = "\n".join(stats_lines)
+        contenido = f"""<?php
+
+namespace {ns_widgets};
+
+use Filament\\Widgets\\StatsOverviewWidget as BaseWidget;
+use Filament\\Widgets\\StatsOverviewWidget\\Stat;
+
+class {nombre_clase} extends BaseWidget
+{{
+    protected ?string $heading = '{titulo}';
+
+    protected function getStats(): array
+    {{
+        return [
+{stats_str}
+        ];
+    }}
+}}
+"""
+        archivos[f"app/Filament/Widgets/{nombre_clase}.php"] = contenido
+
+    return archivos
+
+
 def gen_archivos_matriz_asistencia(idx_base: int, matriz_cfg: dict | None = None) -> dict:
     """Genera migrations + modelos + Filament Resources + Pages para
     tablas auxiliares de matriz_asistencia (asistencias, pagos_quincena).
@@ -2592,6 +2679,12 @@ def generar(empresa: str = None, output_dir: str = "./laravel_output", preview: 
         nombre_arch = "app/Filament/Widgets/KraftDoStatsWidget.php"
         archivos[nombre_arch] = gen_filament_widget(cfg)
         print(f"  📊 {nombre_arch}")
+
+        # Widgets dinámicos (v24b)
+        widgets_dinamicos = gen_widgets(cfg)
+        for path, contenido in widgets_dinamicos.items():
+            archivos[path] = contenido
+            print(f"  📊 {path}")
 
     # 4b. Tablas auxiliares para hojas tipo "matriz_asistencia"
     matriz_cfg = next(

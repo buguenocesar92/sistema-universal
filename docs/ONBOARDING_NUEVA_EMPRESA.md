@@ -70,3 +70,35 @@ Crea un archivo en `empresas/nombre_empresa.json`.
 - **Relaciones Automáticas**: El sistema detecta que `pedidos.sku` apunta a `productos.sku` si los nombres coinciden o están mapeados.
 - **Cálculos**: Define `campos_accessor` en el JSON para traer datos del padre automáticamente (ej: traer el nombre del producto al ver un pedido).
 - **Observers**: Si necesitas que un campo se calcule (ej: `total = cantidad * precio`), asegúrate de que el campo destino esté en el JSON y el sistema aplicará las reglas de `generator.py`.
+- **Dashboards**: Configura el bloque `"dashboard"` para métricas en tiempo real:
+
+### Ejemplo de Dashboard:
+```json
+"dashboard": [
+  {
+    "nombre": "ResumenFinanciero",
+    "titulo": "Resumen Financiero",
+    "stats": [
+      {
+        "label": "Ingresos Totales",
+        "modelo": "Venta",
+        "fn": "sum:total",
+        "color": "success",
+        "icon": "heroicon-m-banknotes"
+      },
+      {
+        "label": "Venta Promedio",
+        "modelo": "Venta",
+        "fn": "avg:total",
+        "color": "warning"
+      },
+      {
+        "label": "Pedidos Realizados",
+        "modelo": "Pedido",
+        "fn": "count"
+      }
+    ]
+  }
+]
+```
+> Las funciones soportadas en `fn` son: `count`, `sum:campo` y `avg:campo`. Los campos que contienen "total", "precio", "costo" o "monto" se formatean automáticamente como moneda CLP.
