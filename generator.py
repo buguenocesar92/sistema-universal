@@ -1678,15 +1678,17 @@ def gen_filament_widget(cfg: dict) -> str:
     )
 
 
-def gen_archivos_matriz_asistencia(idx_base: int) -> dict:
+def gen_archivos_matriz_asistencia(idx_base: int, matriz_cfg: dict | None = None) -> dict:
     """Genera migrations + modelos + Filament Resources + Pages para
     tablas auxiliares de matriz_asistencia (asistencias, pagos_quincena).
 
     Devuelve {ruta: contenido} listo para inyectar en el dict archivos.
     Las tablas son fijas — no dependen del JSON de la matriz; solo de
-    su existencia.
+    su existencia. La vista pivot usa matriz_cfg.mes_actual como mes
+    por defecto.
     """
     archivos = {}
+    mes_default = (matriz_cfg or {}).get("mes_actual", "2026-03")
 
     # 1) Migración asistencias
     mig_a_name = f"2026_01_01_{idx_base:06d}_create_asistencias_table"
@@ -1883,6 +1885,154 @@ def gen_archivos_matriz_asistencia(idx_base: int) -> dict:
             "    }\n"
             "}\n"
         )
+
+    # 6) Página Filament custom: matriz pivotada (trabajador × día)
+    archivos["app/Filament/Pages/MatrizAsistencia.php"] = (
+        "<?php\n\n"
+        "namespace App\\Filament\\Pages;\n\n"
+        "use Filament\\Pages\\Page;\n"
+        "use App\\Models\\Asistencia;\n\n"
+        "class MatrizAsistencia extends Page\n"
+        "{\n"
+        "    protected string $view = 'filament.pages.matriz-asistencia';\n"
+        "    protected static \\BackedEnum|string|null $navigationIcon = 'heroicon-o-table-cells';\n"
+        "    protected static ?string $navigationLabel = 'Matriz de Asistencia';\n"
+        "    protected static ?string $title = 'Matriz de Asistencia';\n"
+        "    protected static ?int $navigationSort = 5;\n\n"
+        f"    public string $mes = '{mes_default}';\n\n"
+        "    public function getTrabajadoresProperty(): array\n"
+        "    {\n"
+        "        return Asistencia::where('mes', $this->mes)\n"
+        "            ->distinct()\n"
+        "            ->orderBy('trabajador')\n"
+        "            ->pluck('trabajador')\n"
+        "            ->filter()\n"
+        "            ->values()\n"
+        "            ->all();\n"
+        "    }\n\n"
+        "    public function getMatrizProperty(): array\n"
+        "    {\n"
+        "        $rows = Asistencia::where('mes', $this->mes)->get();\n"
+        "        $matriz = [];\n"
+        "        foreach ($rows as $r) {\n"
+        "            $dia = (int) (\\Carbon\\Carbon::parse($r->fecha)->format('d'));\n"
+        "            $matriz[$r->trabajador][$dia] = $r->estado;\n"
+        "        }\n"
+        "        return $matriz;\n"
+        "    }\n\n"
+        "    public function getDiasMesProperty(): array\n"
+        "    {\n"
+        "        $fecha = \\Carbon\\Carbon::createFromFormat('Y-m', $this->mes);\n"
+        "        return range(1, $fecha->daysInMonth);\n"
+        "    }\n\n"
+        "    /**\n"
+        "     * Cicla el estado de una celda: '' → A → F → L → ''.\n"
+        "     */\n"
+        "    public function toggleAsistencia(string $trabajador, int $dia): void\n"
+        "    {\n"
+        "        $fecha = sprintf('%s-%02d', $this->mes, $dia);\n"
+        "        $registro = Asistencia::firstOrNew([\n"
+        "            'trabajador' => $trabajador,\n"
+        "            'fecha'      => $fecha,\n"
+        "        ]);\n"
+        "        $estados = ['', 'A', 'F', 'L'];\n"
+        "        $idx = array_search($registro->estado ?? '', $estados, true);\n"
+        "        $next = $estados[(($idx === false ? 0 : $idx) + 1) % count($estados)];\n"
+        "        if ($next === '') {\n"
+        "            if ($registro->exists) {\n"
+        "                $registro->delete();\n"
+        "            }\n"
+        "        } else {\n"
+        "            $registro->mes    = $this->mes;\n"
+        "            $registro->estado = $next;\n"
+        "            $registro->save();\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+
+    # 7) Vista Blade
+    archivos["resources/views/filament/pages/matriz-asistencia.blade.php"] = """<x-filament-panels::page>
+    <div class=\"space-y-4\">
+        <div class=\"flex items-center gap-4\">
+            <label class=\"font-medium\" for=\"mes\">Mes:</label>
+            <input id=\"mes\" type=\"month\" wire:model.live=\"mes\"
+                   class=\"rounded-lg border border-gray-300 px-3 py-1.5 text-sm
+                          bg-white dark:bg-gray-900 dark:border-gray-700\"/>
+            <span class=\"text-xs text-gray-500\">Click en una celda → cicla · → A → F → L → ·</span>
+        </div>
+
+        @php
+            $trabajadores = $this->trabajadores;
+            $matriz       = $this->matriz;
+            $dias         = $this->diasMes;
+        @endphp
+
+        <div class=\"overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700
+                    bg-white dark:bg-gray-900 shadow\">
+            <table class=\"min-w-full text-sm\">
+                <thead class=\"bg-gray-50 dark:bg-gray-800\">
+                    <tr>
+                        <th class=\"sticky left-0 z-10 bg-gray-50 dark:bg-gray-800
+                                   px-3 py-2 text-left font-semibold border-r
+                                   border-gray-200 dark:border-gray-700\">
+                            Trabajador
+                        </th>
+                        @foreach($dias as $d)
+                            <th class=\"px-1 py-2 w-9 text-center text-xs text-gray-600 dark:text-gray-400\">
+                                {{ $d }}
+                            </th>
+                        @endforeach
+                    </tr>
+                </thead>
+                <tbody>
+                    @forelse($trabajadores as $trab)
+                        <tr class=\"border-t border-gray-100 dark:border-gray-800\">
+                            <td class=\"sticky left-0 z-10 bg-white dark:bg-gray-900
+                                       px-3 py-2 font-medium whitespace-nowrap
+                                       border-r border-gray-200 dark:border-gray-700\">
+                                {{ $trab }}
+                            </td>
+                            @foreach($dias as $d)
+                                @php
+                                    $estado = $matriz[$trab][$d] ?? '';
+                                    [$bg, $txt] = match($estado) {
+                                        'A' => ['bg-green-200 hover:bg-green-300 dark:bg-green-700 dark:hover:bg-green-600', 'text-green-900 dark:text-green-100'],
+                                        'F' => ['bg-red-200 hover:bg-red-300 dark:bg-red-700 dark:hover:bg-red-600',         'text-red-900 dark:text-red-100'],
+                                        'L' => ['bg-yellow-200 hover:bg-yellow-300 dark:bg-yellow-700 dark:hover:bg-yellow-600','text-yellow-900 dark:text-yellow-100'],
+                                        default => ['bg-gray-50 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700',  'text-gray-400'],
+                                    };
+                                @endphp
+                                <td class=\"p-0.5 text-center\">
+                                    <button type=\"button\"
+                                        wire:click=\"toggleAsistencia(@js($trab), {{ $d }})\"
+                                        wire:loading.attr=\"disabled\"
+                                        class=\"w-8 h-8 rounded {{ $bg }} {{ $txt }} text-xs font-bold transition\">
+                                        {{ $estado ?: '·' }}
+                                    </button>
+                                </td>
+                            @endforeach
+                        </tr>
+                    @empty
+                        <tr>
+                            <td colspan=\"{{ count($dias) + 1 }}\" class=\"px-3 py-8 text-center text-gray-500\">
+                                Sin asistencias registradas para {{ $mes }}.
+                            </td>
+                        </tr>
+                    @endforelse
+                </tbody>
+            </table>
+        </div>
+
+        <div class=\"flex flex-wrap gap-4 text-xs text-gray-700 dark:text-gray-300\">
+            <span class=\"flex items-center gap-1.5\"><span class=\"inline-block w-4 h-4 rounded bg-green-200 dark:bg-green-700\"></span> A — Asistió</span>
+            <span class=\"flex items-center gap-1.5\"><span class=\"inline-block w-4 h-4 rounded bg-red-200 dark:bg-red-700\"></span> F — Falta</span>
+            <span class=\"flex items-center gap-1.5\"><span class=\"inline-block w-4 h-4 rounded bg-yellow-200 dark:bg-yellow-700\"></span> L — Licencia</span>
+            <span class=\"flex items-center gap-1.5\"><span class=\"inline-block w-4 h-4 rounded bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700\"></span> · — Sin marcar</span>
+        </div>
+    </div>
+</x-filament-panels::page>
+"""
 
     return archivos
 
@@ -2317,9 +2467,13 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
         print(f"  📊 {nombre_arch}")
 
     # 4b. Tablas auxiliares para hojas tipo "matriz_asistencia"
-    if any(h.get("tipo") == "matriz_asistencia" for h in hojas.values()):
+    matriz_cfg = next(
+        (h for h in hojas.values() if h.get("tipo") == "matriz_asistencia"),
+        None
+    )
+    if matriz_cfg:
         idx_base = len(hojas_generables) + 100  # después de las migrations regulares
-        for path, contenido in gen_archivos_matriz_asistencia(idx_base).items():
+        for path, contenido in gen_archivos_matriz_asistencia(idx_base, matriz_cfg).items():
             archivos[path] = contenido
             print(f"  📅 {path}")
 
