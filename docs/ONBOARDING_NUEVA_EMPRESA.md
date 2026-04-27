@@ -102,3 +102,26 @@ Crea un archivo en `empresas/nombre_empresa.json`.
 ]
 ```
 > Las funciones soportadas en `fn` son: `count`, `sum:campo` y `avg:campo`. Los campos que contienen "total", "precio", "costo" o "monto" se formatean automáticamente como moneda CLP.
+
+- **Alertas Proactivas**: Configura el bloque `"alertas"` para monitorear condiciones y disparar avisos:
+
+### Ejemplo de Alertas:
+```json
+"alertas": [
+  {
+    "nombre": "StockCritico",
+    "modelo": "Producto",
+    "condicion": "stock < 5",
+    "mensaje": "¡Atención! El producto {{nombre}} tiene stock crítico: {{stock}} unidades.",
+    "programacion": "hourly"
+  },
+  {
+    "nombre": "CobroPendiente",
+    "modelo": "Venta",
+    "condicion": "estado = 'Pendiente' AND fecha < NOW() - INTERVAL 7 DAY",
+    "mensaje": "La factura {{factura}} de {{empresa}} lleva más de 7 días pendiente.",
+    "programacion": "dailyAt('08:00')"
+  }
+]
+```
+> Las alertas se registran automáticamente en `routes/console.php` y se ejecutan según la frecuencia indicada en `programacion` (usa métodos nativos de Laravel Scheduler como `hourly()`, `daily()`, `mondays()`, etc). Los mensajes soportan variables entre llaves dobles `{{campo}}`.

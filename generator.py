@@ -2267,6 +2267,96 @@ def gen_metodo_recalcular_modelo(alias_agregado: str, cfg_hoja: dict,
     )
 
 
+def gen_alert_commands(cfg: dict) -> dict:
+    """Genera Comandos de Laravel para alertas proactivas."""
+    alertas = cfg.get("alertas", [])
+    if not alertas:
+        return {}
+
+    archivos = {}
+    ns_models = "\\App\\Models\\"
+
+    for a in alertas:
+        nombre = a.get("nombre", "AlertaCustom")
+        modelo = a.get("modelo")
+        condicion = a.get("condicion", "id > 0")
+        mensaje = a.get("mensaje", f"Alerta en {modelo}")
+        signature = f"alerta:{nombre.lower()}"
+
+        if not modelo:
+            continue
+
+        contenido = f"""<?php
+
+namespace App\\Console\\Commands;
+
+use Illuminate\\Console\\Command;
+use Illuminate\\Support\\Facades\\Log;
+use {ns_models}{modelo};
+
+class {nombre}Command extends Command
+{{
+    protected $signature = '{signature}';
+    protected $description = 'Alerta proactiva: {nombre}';
+
+    public function handle(): int
+    {{
+        $registros = {modelo}::whereRaw('{condicion}')->get();
+
+        if ($registros->count() > 0) {{
+            foreach ($registros as $r) {{
+                $msg = "{mensaje}";
+                foreach ($r->toArray() as $key => $val) {{
+                    if (!is_array($val)) {{
+                        $msg = str_replace('{{' . $key . '}}', (string) $val, $msg);
+                    }}
+                }}
+                Log::warning("[ALERTA {nombre}] " . $msg);
+                $this->warn($msg);
+            }}
+            $this->info("Se detectaron " . $registros->count() . " registros.");
+        }}
+
+        return self::SUCCESS;
+    }}
+}}
+"""
+        archivos[f"app/Console/Commands/{nombre}Command.php"] = contenido
+
+    return archivos
+
+
+def gen_console_routes(cfg: dict) -> str:
+    """Genera routes/console.php con la programación de alertas."""
+    alertas = cfg.get("alertas", [])
+    schedules = []
+
+    for a in alertas:
+        nombre = a.get("nombre", "AlertaCustom")
+        prog = a.get("programacion", "daily()")
+        if not prog.endswith(')'):
+            prog += '()'
+        signature = f"alerta:{nombre.lower()}"
+        schedules.append(f"Schedule::command('{signature}')->{prog};")
+
+    schedules_str = "\n".join(schedules)
+
+    return f"""<?php
+
+use Illuminate\\Support\\Facades\\Schedule;
+
+/*
+|--------------------------------------------------------------------------
+| Console Routes
+|--------------------------------------------------------------------------
+*/
+
+{schedules_str}
+
+Schedule::command('kraftdo:recalcular')->daily();
+"""
+
+
 def gen_recalcular_command(modelos_observers: list[str]) -> str:
     """Genera app/Console/Commands/RecalcularTodo.php que llama save() en cada
     registro de los modelos con observer, forzando recálculo de campos derivados."""
@@ -2685,6 +2775,15 @@ def generar(empresa: str = None, output_dir: str = "./laravel_output", preview: 
         for path, contenido in widgets_dinamicos.items():
             archivos[path] = contenido
             print(f"  📊 {path}")
+
+    # 7. Alertas proactivas y Programación (v24b)
+    alert_commands = gen_alert_commands(cfg)
+    for path, contenido in alert_commands.items():
+        archivos[path] = contenido
+        print(f"  🔔 {path}")
+
+    archivos["routes/console.php"] = gen_console_routes(cfg)
+    print(f"  ⏰ routes/console.php")
 
     # 4b. Tablas auxiliares para hojas tipo "matriz_asistencia"
     matriz_cfg = next(
