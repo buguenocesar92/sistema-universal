@@ -35,9 +35,10 @@
         "fecha": "H",
         "modelo": "I",
         "cantidad": "K",
-        "neto": "K",
-        "neto_dsto": "L",
-        "iva": "M"
+        "neto": "L",
+        "neto_dsto": "M",
+        "iva": "N",
+        "total": "O"
       },
       "identificador": "item"
     },

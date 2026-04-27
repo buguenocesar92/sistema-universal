@@ -663,12 +663,10 @@ namespace App\\Models;
 
 use Illuminate\\Database\\Eloquent\\Model;
 use Illuminate\\Database\\Eloquent\\Factories\\HasFactory;
-use Spatie\\Activitylog\\Traits\\LogsActivity;
-use Spatie\\Activitylog\\LogOptions;
 {observer_use}
 {observer_attr}class {modelo} extends Model
 {{
-    use HasFactory, LogsActivity;
+    use HasFactory;
 
     protected $table = '{tabla}';
 
@@ -676,14 +674,7 @@ use Spatie\\Activitylog\\LogOptions;
         {fillable_str},
     ];
 
-    protected $casts = [{casts_block}];{appends_str}
-
-    public function getActivitylogOptions(): LogOptions
-    {{
-        return LogOptions::defaults()
-            ->logAll()
-            ->logOnlyDirty();
-    }}{scope}{rels_str}{accessors_str}{metodo_agregado_str}
+    protected $casts = [{casts_block}];{appends_str}{scope}{rels_str}{accessors_str}{metodo_agregado_str}
 }}
 """
 
