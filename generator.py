@@ -2511,9 +2511,14 @@ def _crear_base_laravel(output_dir: str, empresa: str, cfg: dict) -> bool:
     print("  ✓ Laravel instalado")
 
     # 2. composer require filament
-    print("  🎛️  Instalando Filament 3 y extensiones Spatie ...")
+    print("  🎛️  Instalando Filament 3 y extensiones (Shield, Excel, Spatie) ...")
     r = subprocess.run(
-        ["composer", "require", "filament/filament:^4.0", "spatie/laravel-permission", "spatie/laravel-activitylog", "--no-interaction", "--quiet"],
+        ["composer", "require", "filament/filament:^4.0", 
+         "bezhansalleh/filament-shield", "pxlrbt/filament-excel", 
+         "leandrocfe/filament-apex-charts", "spatie/laravel-medialibrary", 
+         "filament/spatie-laravel-media-library-plugin",
+         "spatie/laravel-permission", "spatie/laravel-activitylog", 
+         "--no-interaction", "--quiet"],
         cwd=output_dir, capture_output=True, text=True
     )
     if r.returncode != 0:
