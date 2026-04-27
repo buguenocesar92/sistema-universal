@@ -150,6 +150,8 @@ def gen_eloquent_relationships(relaciones: list[dict], tabla_origen: str) -> str
     rels = [r for r in relaciones if r["tabla_origen"] == tabla_origen]
     for rel in rels:
         nombre_metodo = rel["campo_origen"].rstrip("s")
+        if nombre_metodo == rel["campo_origen"]:
+            nombre_metodo += "Rel"
         metodos.append(
             f"    public function {nombre_metodo}()\n"
             f"    {{\n"
@@ -182,10 +184,13 @@ def gen_hasmany_relationships(relaciones: list, tabla_destino: str, hojas_cfg: d
 
 def gen_filament_select(rel: dict) -> str:
     """Genera un campo Select de Filament para una relación."""
+    nombre_metodo = rel["campo_origen"].rstrip("s")
+    if nombre_metodo == rel["campo_origen"]:
+        nombre_metodo += "Rel"
     return (
         f"                Forms\\Components\\Select::make('{rel['campo_origen']}')\n"
         f"                    ->label('{rel['campo_origen'].replace('_', ' ').capitalize()}')\n"
-        f"                    ->relationship('{rel['campo_origen'].rstrip('s')}', '{rel['campo_destino']}')\n"
+        f"                    ->relationship('{nombre_metodo}', '{rel['campo_destino']}')\n"
         f"                    ->searchable()\n"
         f"                    ->preload()\n"
         f"                    ->nullable(),"

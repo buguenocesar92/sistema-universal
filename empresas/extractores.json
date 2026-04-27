@@ -34,7 +34,7 @@
         "factura": "G",
         "fecha": "H",
         "modelo": "I",
-        "cantidad": "J",
+        "cantidad": "K",
         "neto": "K",
         "neto_dsto": "L",
         "iva": "M"

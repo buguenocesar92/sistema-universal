@@ -216,8 +216,11 @@ def _resolver_accessor(campo: str, alias_hoja: str, hojas_cfg: dict,
         cols_padre = hojas_cfg[alias_padre].get("columnas", {})
         for c in (campo, SNAPSHOT_SYNONYMS.get(campo)):
             if c and c in cols_padre:
+                nombre_metodo = rel["campo_origen"].rstrip("s")
+                if nombre_metodo == rel["campo_origen"]:
+                    nombre_metodo += "Rel"
                 return {
-                    "rel_method":   nombre_tabla(alias_padre).rstrip("s"),
+                    "rel_method":   nombre_metodo,
                     "modelo_padre": rel["modelo_destino"],
                     "campo_padre":  c,
                     "campo_origen": rel["campo_origen"],
@@ -2295,16 +2298,30 @@ def _crear_base_laravel(output_dir: str, empresa: str, cfg: dict) -> bool:
     print(f"\n✅ Base Laravel lista en {output_dir}\n")
     return True
 
-def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = None):
+def generar(empresa: str = None, output_dir: str = "./laravel_output", preview: bool = False, solo: str = None, config_path: str = None):
     # Cargar config
-    base = os.path.dirname(os.path.abspath(__file__))
-    cfg_path = os.path.join(base, "empresas", f"{empresa}.json")
+    if config_path:
+        cfg_path = config_path
+        # Si no existe literal, buscar en empresas/
+        if not os.path.exists(cfg_path):
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            cfg_path = os.path.join(base_dir, "empresas", config_path)
+    else:
+        if not empresa:
+            print("❌ Falta nombre de empresa o --config")
+            sys.exit(1)
+        base = os.path.dirname(os.path.abspath(__file__))
+        cfg_path = os.path.join(base, "empresas", f"{empresa}.json")
+
     if not os.path.exists(cfg_path):
         print(f"❌ No encontré: {cfg_path}")
         sys.exit(1)
 
     with open(cfg_path, encoding="utf-8") as f:
         cfg = json.load(f)
+
+    # El nombre de la empresa para la BD y carpetas
+    empresa_id = empresa if empresa else os.path.basename(cfg_path).replace(".json", "")
 
     nombre_empresa = cfg["empresa"]["nombre"]
     hojas = cfg["hojas"]
@@ -2316,7 +2333,7 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
 
     # Opción B: crear base Laravel completa si no existe
     if not preview:
-        if not _crear_base_laravel(output_dir, empresa, cfg):
+        if not _crear_base_laravel(output_dir, empresa_id, cfg):
             print("⚠️  Continuando sin crear base Laravel — solo se generan los archivos")
 
     archivos = {}  # path → contenido
@@ -2478,7 +2495,7 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
             print(f"  📅 {path}")
 
     # 5. Script de instalación
-    archivos["install.sh"] = gen_install_script(empresa, hojas_generables)
+    archivos["install.sh"] = gen_install_script(empresa_id, hojas_generables)
     print(f"  ⚙️  install.sh")
 
     print(f"\n  Total: {len(archivos)} archivos\n")
@@ -2584,7 +2601,8 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="KraftDo Generator")
-    parser.add_argument("empresa", help="Nombre de la empresa (ej: kraftdo)")
+    parser.add_argument("empresa", nargs="?", help="Nombre de la empresa (ej: kraftdo)")
+    parser.add_argument("--config", help="Ruta al archivo JSON de configuración")
     parser.add_argument("--output", default="./laravel_output", help="Directorio de salida")
     parser.add_argument("--preview", action="store_true", help="Mostrar sin escribir")
     parser.add_argument("--solo",
@@ -2593,4 +2611,4 @@ if __name__ == "__main__":
                         help="Generar solo una capa")
     args = parser.parse_args()
 
-    generar(args.empresa, args.output, args.preview, args.solo)
+    generar(args.empresa, args.output, args.preview, args.solo, args.config)

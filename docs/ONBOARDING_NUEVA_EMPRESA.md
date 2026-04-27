@@ -1,0 +1,72 @@
+# Onboarding: Nueva Empresa en Sistema Universal
+
+Este documento describe el proceso para integrar una nueva empresa al generador de paneles administrativos.
+
+## 1. Requisitos del Excel
+El archivo Excel es la fuente de verdad. Debe cumplir con:
+- **Formato**: `.xlsx` (OpenXML).
+- **Estructura**: Una hoja por cada entidad (ej: Clientes, Productos, Ventas).
+- **Headers**: La primera fila de datos (indicada en `fila_datos`) debe contener los nombres de las columnas.
+- **Tipos de Hoja Soportados**:
+  - `catalogo`: Tablas de referencia (Maestros) con identificadores únicos.
+  - `registros`: Transacciones u operaciones que suelen tener FKs a catálogos.
+  - `agregado`: Hojas que consolidan datos de otras (ej: Stock, Resultados).
+  - `kpis`: Celdas específicas para indicadores clave.
+
+## 2. Preparación del JSON de Configuración
+Crea un archivo en `empresas/nombre_empresa.json`.
+
+### Ejemplo Mínimo Funcional:
+```json
+{
+  "empresa": {
+    "nombre": "Mi Nueva Empresa",
+    "email": "soporte@empresa.com",
+    "color_primary": "2563EB"
+  },
+  "fuente": {
+    "tipo": "local",
+    "archivo": "xls/mi_archivo.xlsx"
+  },
+  "hojas": {
+    "productos": {
+      "nombre": "Productos",
+      "tipo": "catalogo",
+      "fila_datos": 2,
+      "columnas": {
+        "sku": "A",
+        "nombre": "B",
+        "precio": "C"
+      },
+      "identificador": "sku"
+    },
+    "pedidos": {
+      "nombre": "Pedidos",
+      "tipo": "registros",
+      "fila_datos": 2,
+      "columnas": {
+        "id": "A",
+        "fecha": "B",
+        "sku": "C",
+        "cantidad": "D"
+      },
+      "identificador": "id"
+    }
+  }
+}
+```
+
+## 3. Proceso de Integración
+1. **Validación**: Ejecuta `python classifier.py` y sube el Excel para obtener una sugerencia inicial de JSON.
+2. **Refinamiento**: Ajusta las letras de las columnas y los tipos de hoja en el JSON generado.
+3. **Generación**:
+   ```bash
+   python generator.py --config mi_empresa.json
+   ```
+4. **Validación Visual**: Revisa el panel generado en el directorio de salida (por defecto `/tmp/nombre_empresa`).
+5. **Despliegue**: Mueve el código a producción o agrégalo a `levantar.sh`.
+
+## 4. Tips Avanzados
+- **Relaciones Automáticas**: El sistema detecta que `pedidos.sku` apunta a `productos.sku` si los nombres coinciden o están mapeados.
+- **Cálculos**: Define `campos_accessor` en el JSON para traer datos del padre automáticamente (ej: traer el nombre del producto al ver un pedido).
+- **Observers**: Si necesitas que un campo se calcule (ej: `total = cantidad * precio`), asegúrate de que el campo destino esté en el JSON y el sistema aplicará las reglas de `generator.py`.
