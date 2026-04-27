@@ -392,10 +392,12 @@ def gen_migracion(alias: str, cfg_hoja: dict, idx: int) -> str:
                 t, mod = inferir_tipo(campo)
                 if t.startswith("decimal"):
                     p, s = t.split(":")[1].split(",")
+                    unsigned = "->unsigned()" if campo in CAMPOS_MONEDA or any(x in campo.lower() for x in ("precio", "costo", "total", "cantidad", "stock", "unidades")) else ""
                     lineas.append(
-                        "            $table->decimal('" + campo + "', " + p + ", " + s + ")->nullable();")
+                        "            $table->decimal('" + campo + "', " + p + ", " + s + ")" + unsigned + "->nullable();")
                 elif t == "integer":
-                    lineas.append("            $table->integer('" + campo + "')->nullable();")
+                    unsigned = "->unsigned()" if any(x in campo.lower() for x in ("cantidad", "stock", "unidades", "dias", "horas")) else ""
+                    lineas.append("            $table->integer('" + campo + "')" + unsigned + "->nullable();")
                 elif t == "text":
                     lineas.append("            $table->text('" + campo + "')->nullable();")
                 elif t == "timestamp":
@@ -451,6 +453,8 @@ def gen_migracion(alias: str, cfg_hoja: dict, idx: int) -> str:
             precision = partes[1] if len(partes) > 1 else "10,2"
             p, s = precision.split(",")
             linea = f"            $table->decimal('{campo}', {p}, {s})"
+            if campo in CAMPOS_MONEDA or any(x in campo.lower() for x in ("precio", "costo", "total", "cantidad", "stock", "unidades")):
+                linea += "->unsigned()"
         elif tipo.startswith("string:"):
             largo = tipo.split(":")[1]
             linea = f"            $table->string('{campo}', {largo})"
@@ -458,6 +462,8 @@ def gen_migracion(alias: str, cfg_hoja: dict, idx: int) -> str:
             linea = f"            $table->text('{campo}')"
         elif tipo == "integer":
             linea = f"            $table->integer('{campo}')"
+            if any(x in campo.lower() for x in ("cantidad", "stock", "unidades", "dias", "horas")):
+                linea += "->unsigned()"
         elif tipo == "boolean":
             linea = f"            $table->boolean('{campo}')"
         elif tipo == "timestamp":
@@ -1001,7 +1007,7 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
             continue
         t, mod = inferir_tipo(campo)
         label  = campo.replace("_", " ").capitalize()
-        req    = ""  # Filament 4: nullable/required se maneja en validación
+        req    = "->required()" if "nullable" not in mod else ""
 
         # Prioridad 1: estado con valores definidos en el JSON
         if campo == "estado" and estados:
@@ -1049,6 +1055,7 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
                 "            Forms\\Components\\TextInput::make('" + campo + "')\n"
                 "                ->label('" + label + "')\n"
                 "                ->numeric()\n"
+                "                ->minValue(0)\n"
                 "                ->prefix('$')" + req + ","
             )
         elif t == "text":
@@ -1060,7 +1067,8 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
             form_fields.append(
                 "            Forms\\Components\\TextInput::make('" + campo + "')\n"
                 "                ->label('" + label + "')\n"
-                "                ->numeric()" + req + ","
+                "                ->numeric()\n"
+                "                ->minValue(0)" + req + ","
             )
         elif t == "timestamp":
             form_fields.append(
