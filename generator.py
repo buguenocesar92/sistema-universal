@@ -657,10 +657,12 @@ namespace App\\Models;
 
 use Illuminate\\Database\\Eloquent\\Model;
 use Illuminate\\Database\\Eloquent\\Factories\\HasFactory;
+use Spatie\\Activitylog\\Traits\\LogsActivity;
+use Spatie\\Activitylog\\LogOptions;
 {observer_use}
 {observer_attr}class {modelo} extends Model
 {{
-    use HasFactory;
+    use HasFactory, LogsActivity;
 
     protected $table = '{tabla}';
 
@@ -668,7 +670,14 @@ use Illuminate\\Database\\Eloquent\\Factories\\HasFactory;
         {fillable_str},
     ];
 
-    protected $casts = [{casts_block}];{appends_str}{scope}{rels_str}{accessors_str}{metodo_agregado_str}
+    protected $casts = [{casts_block}];{appends_str}
+
+    public function getActivitylogOptions(): LogOptions
+    {{
+        return LogOptions::defaults()
+            ->logAll()
+            ->logOnlyDirty();
+    }}{scope}{rels_str}{accessors_str}{metodo_agregado_str}
 }}
 """
 
@@ -1221,6 +1230,11 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
         "use Filament\\Resources\\Resource;\n"
         "use Filament\\Tables;\n"
         "use Filament\\Tables\\Table;\n\n"
+        "/**\n"
+        " * Para habilitar el historial de actividades de Spatie, puedes agregar:\n"
+        " * use Rmswv\\FilamentActivitylog\\Extensions\\Loggable; al Resource\n"
+        " * o implementar un Relation Manager para activities.\n"
+        " */\n"
         "class " + resource + " extends Resource\n"
         "{\n"
         "    protected static ?string $model = " + modelo + "::class;\n"
@@ -2227,9 +2241,11 @@ def gen_install_script(empresa: str, hojas: dict) -> str:
         "composer require spatie/laravel-medialibrary\\n"
         "composer require filament/spatie-laravel-media-library-plugin\\n"
         "composer require spatie/laravel-permission\\n"
+        "composer require spatie/laravel-activitylog\\n"
         'echo "✅ Dependencias + plugins Filament instalados"\n\n'
         "# 2. Migraciones\n"
         "php artisan vendor:publish --provider=\"Spatie\\Permission\\PermissionServiceProvider\"\n"
+        "php artisan vendor:publish --provider=\"Spatie\\Activitylog\\ActivitylogServiceProvider\" --tag=\"activitylog-migrations\"\n"
         "php artisan migrate --force\n"
         'echo "✅ Tablas creadas"\n\n'
         "# 3. Seeders (datos de ejemplo)\n"
