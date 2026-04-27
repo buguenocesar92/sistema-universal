@@ -13,7 +13,34 @@
   },
   "logica_negocios": {
     "iva": 0.19,
-    "moneda": "CLP"
+    "moneda": "CLP",
+    "kpis_custom": [
+      {
+        "label": "Productos en catálogo",
+        "modelo": "Producto",
+        "agregacion": "count",
+        "color": "primary",
+        "formato": "numero",
+        "descripcion": "Productos activos"
+      },
+      {
+        "label": "Pedidos del mes",
+        "modelo": "Pedido",
+        "agregacion": "count",
+        "where": [["fecha", ">=", "today"]],
+        "color": "warning",
+        "formato": "numero",
+        "descripcion": "Pedidos desde hoy"
+      },
+      {
+        "label": "Saldo Caja",
+        "modelo": "Caja",
+        "agregacion": "sum:monto",
+        "color": "success",
+        "formato": "moneda",
+        "descripcion": "Suma de movimientos"
+      }
+    ]
   },
   "hojas": {
     "productos": {

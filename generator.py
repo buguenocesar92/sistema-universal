@@ -802,12 +802,61 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
 
     table_str = "\n".join(table_cols)
 
-    # Filtro de estado
-    filters_str = ""
+    # Filtros: SelectFilter por estado/enums + DateRangeFilter por fechas
+    filters_lines = []
     if "estado" in cols:
-        filters_str = (
-            "\n                Tables\\Filters\\SelectFilter::make('estado')\n"
+        filters_lines.append(
+            "                Tables\\Filters\\SelectFilter::make('estado')\n"
             "                    ->options(fn() => " + ns_models + modelo + "::distinct()->pluck('estado', 'estado')->toArray()),"
+        )
+    for campo, valores in enums.items():
+        if campo == "estado":
+            continue
+        opts = ", ".join("'" + v.replace("'", "\\'") + "' => '" + v.replace("'", "\\'") + "'" for v in valores)
+        filters_lines.append(
+            "                Tables\\Filters\\SelectFilter::make('" + campo + "')\n"
+            "                    ->label('" + campo.replace('_', ' ').capitalize() + "')\n"
+            "                    ->options([" + opts + "]),"
+        )
+    # DateRangeFilter (un Filter con dos DatePicker)
+    for campo in cols:
+        t, _ = inferir_tipo(campo)
+        if t != "timestamp":
+            continue
+        filters_lines.append(
+            "                Tables\\Filters\\Filter::make('" + campo + "_range')\n"
+            "                    ->label('" + campo.replace('_', ' ').capitalize() + " (rango)')\n"
+            "                    ->schema([\n"
+            "                        Forms\\Components\\DatePicker::make('desde')->native(false),\n"
+            "                        Forms\\Components\\DatePicker::make('hasta')->native(false),\n"
+            "                    ])\n"
+            "                    ->query(fn ($query, array $data) => $query\n"
+            "                        ->when($data['desde'] ?? null, fn ($q, $d) => $q->whereDate('" + campo + "', '>=', $d))\n"
+            "                        ->when($data['hasta'] ?? null, fn ($q, $d) => $q->whereDate('" + campo + "', '<=', $d))\n"
+            "                    ),"
+        )
+    filters_str = ("\n" + "\n".join(filters_lines)) if filters_lines else ""
+
+    # Global search: primeros 3 campos string no técnicos
+    search_attrs = []
+    for campo in cols:
+        if len(search_attrs) >= 3:
+            break
+        if campo in ("id", "n_pedido"):
+            continue
+        if campo in CAMPOS_MONEDA or campo in calc_fields:
+            continue
+        t, _ = inferir_tipo(campo)
+        if t == "string" or t.startswith("string"):
+            search_attrs.append(campo)
+    global_search = ""
+    if search_attrs:
+        attrs = ", ".join("'" + c + "'" for c in search_attrs)
+        global_search = (
+            "    public static function getGloballySearchableAttributes(): array\n"
+            "    {\n"
+            f"        return [{attrs}];\n"
+            "    }\n\n"
         )
 
     # ExportAction desactivado — requiere pxlrbt/filament-excel
@@ -871,6 +920,7 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
         "                ]),\n"
         "            ]);\n"
         "    }\n\n"
+        + global_search +
         "    public static function getPages(): array\n"
         "    {\n"
         "        return [\n"
@@ -1022,18 +1072,41 @@ def gen_filament_pages(alias: str, cfg_hoja: dict) -> dict:
     ns_r = "App\\Filament\\Resources\\"
     ns_f = "Filament\\"
 
+    tabla_n = nombre_tabla(alias)
     pages["app/Filament/Resources/" + modelo_n + "Resource/Pages/List" + modelo_n + "s.php"] = (
         "<?php\n\n"
         "namespace " + ns_r + modelo_n + "Resource\\Pages;\n\n"
         "use " + ns_r + modelo_n + "Resource;\n"
         "use " + ns_f + "Actions;\n"
+        "use App\\Models\\" + modelo_n + ";\n"
         "use " + ns_f + "Resources\\Pages\\ListRecords;\n\n"
         "class List" + modelo_n + "s extends ListRecords\n"
         "{\n"
         "    protected static string $resource = " + modelo_n + "Resource::class;\n\n"
         "    protected function getHeaderActions(): array\n"
         "    {\n"
-        "        return [Actions\\CreateAction::make()];\n"
+        "        return [\n"
+        "            Actions\\CreateAction::make(),\n"
+        "            Actions\\Action::make('export_csv')\n"
+        "                ->label('Exportar CSV')\n"
+        "                ->icon('heroicon-o-arrow-down-tray')\n"
+        "                ->color('success')\n"
+        "                ->action(function () {\n"
+        "                    $registros = " + modelo_n + "::all();\n"
+        "                    $filename = '" + tabla_n + "_' . now()->format('Y-m-d_His') . '.csv';\n"
+        "                    return response()->streamDownload(function () use ($registros) {\n"
+        "                        $out = fopen('php://output', 'w');\n"
+        "                        fwrite($out, \"\\xEF\\xBB\\xBF\");\n"
+        "                        if ($registros->isNotEmpty()) {\n"
+        "                            fputcsv($out, array_keys($registros->first()->toArray()), ';');\n"
+        "                            foreach ($registros as $r) {\n"
+        "                                fputcsv($out, array_map(fn($v) => is_array($v) ? json_encode($v) : (string) $v, $r->toArray()), ';');\n"
+        "                            }\n"
+        "                        }\n"
+        "                        fclose($out);\n"
+        "                    }, $filename, ['Content-Type' => 'text/csv; charset=UTF-8']);\n"
+        "                }),\n"
+        "        ];\n"
         "    }\n"
         "}\n"
     )
@@ -1131,27 +1204,103 @@ def gen_api_controller(alias: str, cfg_hoja: dict) -> str:
 
 
 
+STOCK_FIELDS = {"stock", "stock_disponible", "disponible", "cantidad"}
+STOCK_UMBRAL = 5
+
+
 def gen_filament_widget(cfg: dict) -> str:
     """Genera un widget de KPIs para el dashboard de Filament.
 
-    v19: para cada hoja registros/catálogo emite:
-      - Stat de conteo (siempre).
-      - Stat de SUM del primer campo financiero detectado (si existe).
-    Los montos se formatean como CLP ($ 1.234.567).
+    v21: incluye:
+      - Conteo y sumas financieras por hoja (existente).
+      - Stat 'Stock crítico' en color danger cuando hay registros con
+        stock|cantidad|disponible < STOCK_UMBRAL.
+      - KPIs custom desde cfg.logica_negocios.kpis_custom (si está definido).
     """
     hojas     = cfg.get("hojas", {})
     registros = {a: h for a, h in hojas.items() if h.get("tipo") in ("registros", "catalogo")}
     ns        = "\\App\\Models\\"
-    moneda    = cfg.get("logica_negocios", {}).get("moneda", "CLP")
+    logica    = cfg.get("logica_negocios", {})
+    moneda    = logica.get("moneda", "CLP")
     simbolo   = "$"
 
     stats_lines = []
+
+    # 1) KPIs custom desde el JSON: logica_negocios.kpis_custom = [{...}]
+    for kpi in logica.get("kpis_custom", []):
+        label   = kpi.get("label", "KPI")
+        modelo_n = kpi.get("modelo")
+        if not modelo_n:
+            continue
+        agreg   = kpi.get("agregacion", "count")
+        color   = kpi.get("color", "primary")
+        formato = kpi.get("formato", "numero")
+        wheres  = kpi.get("where", [])
+        descr   = kpi.get("descripcion", label)
+
+        # Construir cadena de wheres en PHP
+        where_php = ""
+        for w in wheres:
+            if not isinstance(w, list) or len(w) < 3:
+                continue
+            campo, op, val = w[0], w[1], w[2]
+            if val == "today":
+                val_php = "now()->startOfDay()"
+            elif isinstance(val, (int, float)):
+                val_php = str(val)
+            else:
+                val_php = "'" + str(val).replace("'", "\\'") + "'"
+            where_php += "->where('" + campo + "', '" + op + "', " + val_php + ")"
+
+        # Construir agregación
+        if agreg == "count":
+            valor = ns + modelo_n + "::query()" + where_php + "->count()"
+        elif agreg.startswith("sum:"):
+            campo = agreg.split(":", 1)[1]
+            valor = "(float) " + ns + modelo_n + "::query()" + where_php + "->sum('" + campo + "')"
+        elif agreg.startswith("avg:"):
+            campo = agreg.split(":", 1)[1]
+            valor = "(float) " + ns + modelo_n + "::query()" + where_php + "->avg('" + campo + "')"
+        else:
+            valor = ns + modelo_n + "::count()"
+
+        if formato == "moneda":
+            stat_value = "'" + simbolo + " ' . number_format(" + valor + ", 0, ',', '.')"
+            icono = "heroicon-m-banknotes"
+        else:
+            stat_value = "(string) (" + valor + ")"
+            icono = "heroicon-m-chart-bar"
+
+        stats_lines.append(
+            "            Stat::make('" + label + "', fn() => " + stat_value + ")\n"
+            "                ->description('" + descr.replace("'", "\\'") + "')\n"
+            "                ->descriptionIcon('" + icono + "')\n"
+            "                ->color('" + color + "'),"
+        )
+
+    # 2) Stock crítico (auto-detectado)
+    for alias, hoja in registros.items():
+        modelo_n = nombre_modelo(alias)
+        label    = alias.replace("_", " ").title()
+        cols     = list(hoja.get("columnas", {}).keys())
+        for campo in cols:
+            if campo not in STOCK_FIELDS:
+                continue
+            stats_lines.append(
+                "            Stat::make('" + label + " — Stock crítico', fn() => "
+                + ns + modelo_n + "::where('" + campo + "', '<', " + str(STOCK_UMBRAL) + ")->count())\n"
+                "                ->description('Registros con " + campo + " < " + str(STOCK_UMBRAL) + "')\n"
+                "                ->descriptionIcon('heroicon-m-exclamation-triangle')\n"
+                "                ->color(fn() => " + ns + modelo_n + "::where('" + campo + "', '<', " + str(STOCK_UMBRAL) + ")->count() > 0 ? 'danger' : 'gray'),"
+            )
+            break  # solo un stock-stat por hoja
+
+    # 3) Conteos y sumas financieras por hoja
     for alias, hoja in list(registros.items())[:6]:
         modelo_n = nombre_modelo(alias)
         label    = alias.replace("_", " ").title()
         cols     = list(hoja.get("columnas", {}).keys())
 
-        # 1) Conteo
         stats_lines.append(
             "            Stat::make('" + label + " — Total', fn() => "
             + ns + modelo_n + "::count())\n"
@@ -1160,7 +1309,6 @@ def gen_filament_widget(cfg: dict) -> str:
             "                ->color('primary'),"
         )
 
-        # 2) Sumas de campos financieros (máx 2 por hoja, evita duplicar dashboard)
         sumas = 0
         for campo in cols:
             if sumas >= 2:
