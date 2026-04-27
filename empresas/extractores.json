@@ -38,7 +38,7 @@
     },
     "stock": {
       "nombre": "Control Stock",
-      "tipo": "registros",
+      "tipo": "agregado",
       "fila_datos": 5,
       "columnas": {
         "modelo": "B",
@@ -47,7 +47,13 @@
         "promociones": "E",
         "stock_disponible": "F"
       },
-      "identificador": "modelo"
+      "identificador": "modelo",
+      "agrupar_por": "modelo",
+      "fuentes": [
+        {"hoja": "importaciones", "campo_grupo": "modelo", "campo_valor": "unidades", "destino": "importacion"},
+        {"hoja": "ventas",        "campo_grupo": "modelo", "campo_valor": "cantidad", "destino": "ventas"},
+        {"hoja": "promociones",   "campo_grupo": "modelo", "campo_valor": "cantidad", "destino": "promociones"}
+      ]
     },
     "promociones": {
       "nombre": "Control de promociones",

@@ -184,6 +184,48 @@ REGLAS_CALCULO = [
 ]
 
 
+SNAPSHOT_SYNONYMS = {
+    # campo en el hijo → posible nombre en el padre cuando no coincide
+    "producto": "nombre",
+    "cliente":  "nombre",
+}
+
+
+def _resolver_accessor(campo: str, alias_hoja: str, hojas_cfg: dict,
+                        relaciones: list) -> dict | None:
+    """Dado un campo en el hijo, busca la FK cuyo padre lo contiene.
+
+    Prioridad: si existe una FK cuyo padre singular coincide con `campo`
+    (ej. campo='producto' → FK a tabla 'productos'), se prefiere esa
+    relación incluso si otra también tiene una col con ese nombre vía
+    sinónimo. Así `pedidos.producto` resuelve a productos.nombre y no
+    a clientes.nombre.
+    """
+    tabla_origen = nombre_tabla(alias_hoja)
+    rels_hoja = [r for r in relaciones if r["tabla_origen"] == tabla_origen]
+    # Sort: las FK cuyo padre singular == campo van primero
+    rels_hoja.sort(key=lambda r: 0 if r["tabla_destino"].rstrip("s") == campo else 1)
+
+    for rel in rels_hoja:
+        alias_padre = next(
+            (a for a, h in hojas_cfg.items() if nombre_tabla(a) == rel["tabla_destino"]),
+            None
+        )
+        if not alias_padre:
+            continue
+        cols_padre = hojas_cfg[alias_padre].get("columnas", {})
+        for c in (campo, SNAPSHOT_SYNONYMS.get(campo)):
+            if c and c in cols_padre:
+                return {
+                    "rel_method":   nombre_tabla(alias_padre).rstrip("s"),
+                    "modelo_padre": rel["modelo_destino"],
+                    "campo_padre":  c,
+                    "campo_origen": rel["campo_origen"],
+                    "campo_destino": rel["campo_destino"],
+                }
+    return None
+
+
 def _calculos_aplicables(cols: dict) -> list[dict]:
     """Devuelve las reglas de cálculo cuyo campo destino + deps están en cols."""
     nombres = set(cols.keys())
@@ -550,12 +592,51 @@ def gen_modelo(alias: str, cfg_hoja: dict, empresa_cfg: dict, relaciones=None, f
             if conv.get("php"):
                 accessors_str += "\n\n" + gen_accessors_php(conv["campo"], conv)
 
-    # ¿Tiene observer? Cuando hay reglas de cálculo aplicables
-    # o cuando la hoja define formato_id para auto-numeración.
+    # Accessors "vista lateral" (VLOOKUP triviales) desde campos_accessor
+    appends = []
+    campos_accessor = cfg_hoja.get("campos_accessor", []) or []
+    hojas_cfg = empresa_cfg.get("hojas", {}) if empresa_cfg else {}
+    rels_disp = getattr(gen_modelo, '_relaciones', []) or []
+    for nombre in campos_accessor:
+        info = _resolver_accessor(nombre, alias, hojas_cfg, rels_disp)
+        if not info:
+            continue
+        # Nombre del método get + StudlyCase
+        studly = "".join(w.capitalize() for w in re.split(r'[_\-]+', nombre))
+        # Usa la forma método ($this->relation()) para no chocar con
+        # la columna del mismo nombre. firstOrNew evita N+1 y nullsafes.
+        accessors_str += (
+            "\n\n"
+            f"    public function get{studly}Attribute()\n"
+            "    {\n"
+            f"        return $this->{info['rel_method']}()->first()?->{info['campo_padre']};\n"
+            "    }"
+        )
+        appends.append(nombre)
+    appends_str = ""
+    if appends:
+        appends_str = (
+            "\n\n    protected $appends = ["
+            + ", ".join(f"'{a}'" for a in appends)
+            + "];"
+        )
+
+    # Método estático recalcularModelo para hojas tipo "agregado"
+    metodo_agregado_str = ""
+    if cfg_hoja.get("tipo") == "agregado" and empresa_cfg:
+        metodo_agregado_str = "\n\n" + gen_metodo_recalcular_modelo(
+            alias, cfg_hoja, empresa_cfg
+        )
+
+    # ¿Tiene observer? Cuando hay reglas de cálculo aplicables, formato_id
+    # para auto-numeración, snapshot_at_create, o cascadas registradas.
     formato_id = cfg_hoja.get("formato_id")
     ident      = cfg_hoja.get("identificador")
-    tiene_observer = bool(_calculos_aplicables(cols)) or bool(
-        formato_id and ident and ident in cols
+    tiene_observer = (
+        bool(_calculos_aplicables(cols))
+        or bool(formato_id and ident and ident in cols)
+        or bool(cfg_hoja.get("snapshot_at_create"))
+        or bool(cfg_hoja.get("_cascadas"))
     )
     observer_use   = ""
     observer_attr  = ""
@@ -583,12 +664,57 @@ use Illuminate\\Database\\Eloquent\\Factories\\HasFactory;
         {fillable_str},
     ];
 
-    protected $casts = [{casts_block}];{scope}{rels_str}{accessors_str}
+    protected $casts = [{casts_block}];{appends_str}{scope}{rels_str}{accessors_str}{metodo_agregado_str}
 }}
 """
 
 
-def gen_observer(alias: str, cfg_hoja: dict) -> str | None:
+def _resolver_snapshot(item, alias_hoja: str, hojas_cfg: dict,
+                        relaciones: list) -> dict | None:
+    """Resuelve una entrada de snapshot_at_create.
+
+    Acepta:
+      - string: campo a copiar; resuelve el padre por _resolver_accessor.
+      - dict {campo, desde?, campo_padre?, fn?, base?}: explicit override.
+
+    Devuelve dict normalizado con todos los datos para emitir PHP, o None.
+    """
+    if isinstance(item, str):
+        info = _resolver_accessor(item, alias_hoja, hojas_cfg, relaciones)
+        if not info:
+            return None
+        return {
+            "campo":         item,
+            "desde":         info["campo_origen"],
+            "campo_destino": info["campo_destino"],
+            "modelo_padre":  info["modelo_padre"],
+            "campo_padre":   info["campo_padre"],
+            "fn":            None,
+        }
+    if isinstance(item, dict):
+        # Resolver el padre desde el campo `desde` (FK del hijo)
+        tabla_origen = nombre_tabla(alias_hoja)
+        rel = next(
+            (r for r in relaciones
+             if r["tabla_origen"] == tabla_origen
+             and r["campo_origen"] == item.get("desde")),
+            None
+        )
+        if not rel:
+            return None
+        return {
+            "campo":         item.get("campo"),
+            "desde":         rel["campo_origen"],
+            "campo_destino": rel["campo_destino"],
+            "modelo_padre":  rel["modelo_destino"],
+            "campo_padre":   item.get("campo_padre", item.get("campo")),
+            "fn":            item.get("fn"),
+            "base":          item.get("base"),
+        }
+    return None
+
+
+def gen_observer(alias: str, cfg_hoja: dict, empresa_cfg: dict | None = None) -> str | None:
     """Genera un Observer PHP que recalcula campos al guardar.
 
     Devuelve el contenido PHP, o None si la hoja no tiene ni reglas
@@ -604,7 +730,22 @@ def gen_observer(alias: str, cfg_hoja: dict) -> str | None:
     ident      = cfg_hoja.get("identificador")
     auto_id    = bool(formato_id and ident and ident in cols)
 
-    if not aplicables and not auto_id:
+    # Snapshot at create: campos del padre que se copian en creating()
+    snapshots = []
+    snap_cfg = cfg_hoja.get("snapshot_at_create", []) or []
+    if snap_cfg:
+        rels_disp = getattr(gen_modelo, '_relaciones', []) or []
+        hojas_cfg = empresa_cfg.get("hojas", {}) if empresa_cfg else {}
+        for item in snap_cfg:
+            resolved = _resolver_snapshot(item, alias, hojas_cfg, rels_disp)
+            if resolved and resolved["campo"] in cols:
+                snapshots.append(resolved)
+
+    # Cascada agregada: cuando esta hoja es fuente de otra hoja tipo "agregado",
+    # disparar Stock::recalcularModelo() en saved/deleted.
+    cascadas = cfg_hoja.get("_cascadas", []) or []
+
+    if not aplicables and not auto_id and not snapshots and not cascadas:
         return None
 
     modelo = nombre_modelo(alias)
@@ -645,9 +786,88 @@ def gen_observer(alias: str, cfg_hoja: dict) -> str | None:
                 "    }\n"
             )
 
-    creating_calls = "        $this->recalcular($model);"
+    # Bloque de snapshot creating-only
+    snapshot_block = ""
+    if snapshots:
+        # Agrupar por (desde, modelo_padre, campo_destino) para hacer un solo lookup
+        grupos = {}
+        for s in snapshots:
+            k = (s["desde"], s["modelo_padre"], s["campo_destino"])
+            grupos.setdefault(k, []).append(s)
+
+        partes = []
+        for (desde, modelo_padre, campo_destino), items in grupos.items():
+            asignaciones = []
+            for s in items:
+                campo = s["campo"]
+                if s.get("fn") == "fecha_plus_dias":
+                    base = s.get("base", "fecha")
+                    asignaciones.append(
+                        f"            if (empty($model->{campo}) && !empty($model->{base})) {{\n"
+                        f"                $model->{campo} = \\Carbon\\Carbon::parse($model->{base})\n"
+                        f"                    ->addDays((int) ($padre->{s['campo_padre']} ?? 0));\n"
+                        f"            }}"
+                    )
+                else:
+                    asignaciones.append(
+                        f"            if (empty($model->{campo})) {{\n"
+                        f"                $model->{campo} = $padre->{s['campo_padre']};\n"
+                        f"            }}"
+                    )
+            partes.append(
+                f"        if (!empty($model->{desde})) {{\n"
+                f"            $padre = \\App\\Models\\{modelo_padre}::query()\n"
+                f"                ->where('{campo_destino}', $model->{desde})\n"
+                "                ->first();\n"
+                "            if ($padre) {\n"
+                + "\n".join(asignaciones) + "\n"
+                "            }\n"
+                "        }"
+            )
+        snapshot_block = (
+            "\n"
+            f"    public function creatingSnapshot({modelo} $model): void\n"
+            "    {\n"
+            + "\n\n".join(partes) + "\n"
+            "    }\n"
+        )
+
+    # Bloque cascada: en saved/deleted dispara recálculo del agregado destino.
+    cascada_block = ""
+    cascada_hooks = []
+    if cascadas:
+        for c in cascadas:
+            modelo_destino = c["modelo_destino"]
+            campo_grupo    = c["campo_grupo"]  # campo en este modelo (origen)
+            cascada_hooks.append(
+                f"        if (!empty($model->{campo_grupo})) {{\n"
+                f"            \\App\\Models\\{modelo_destino}::recalcularModelo($model->{campo_grupo});\n"
+                "        }"
+            )
+        cascada_block = (
+            "\n"
+            f"    public function saved({modelo} $model): void\n"
+            "    {\n"
+            + "\n".join(cascada_hooks) + "\n"
+            "    }\n\n"
+            f"    public function deleted({modelo} $model): void\n"
+            "    {\n"
+            + "\n".join(cascada_hooks) + "\n"
+            "    }\n"
+        )
+
+    creating_calls = []
     if auto_id_block:
-        creating_calls = "        $this->creatingAutoId($model);\n" + creating_calls
+        creating_calls.append("        $this->creatingAutoId($model);")
+    if snapshot_block:
+        creating_calls.append("        $this->creatingSnapshot($model);")
+    if aplicables:
+        creating_calls.append("        $this->recalcular($model);")
+    if not creating_calls:
+        creating_calls = ["        // (nada que hacer al crear)"]
+    creating_body = "\n".join(creating_calls)
+
+    updating_body = "        $this->recalcular($model);" if aplicables else "        // (sin recálculo en update)"
 
     return (
         "<?php\n\n"
@@ -661,17 +881,19 @@ def gen_observer(alias: str, cfg_hoja: dict) -> str | None:
         "{\n"
         f"    public function creating({modelo} $model): void\n"
         "    {\n"
-        + creating_calls + "\n"
+        + creating_body + "\n"
         "    }\n\n"
         f"    public function updating({modelo} $model): void\n"
         "    {\n"
-        "        $this->recalcular($model);\n"
+        + updating_body + "\n"
         "    }\n\n"
         f"    protected function recalcular({modelo} $model): void\n"
         "    {\n"
         + body + "\n"
         "    }\n"
         + auto_id_block
+        + snapshot_block
+        + cascada_block
         + "}\n"
     )
 
@@ -1397,6 +1619,52 @@ def gen_filament_widget(cfg: dict) -> str:
     )
 
 
+def gen_metodo_recalcular_modelo(alias_agregado: str, cfg_hoja: dict,
+                                  empresa_cfg: dict) -> str:
+    """Genera el método estático Stock::recalcularModelo($valor) que se
+    inyecta como trait/método en el modelo agregado.
+
+    Aplica los SUM por fuente y hace UPSERT en la tabla agregada.
+    """
+    modelo = nombre_modelo(alias_agregado)
+    grupo  = cfg_hoja.get("agrupar_por", cfg_hoja.get("identificador", "modelo"))
+    fuentes = cfg_hoja.get("fuentes", [])
+    hojas   = empresa_cfg.get("hojas", {})
+
+    sumas = []
+    for fuente in fuentes:
+        alias_f   = fuente.get("hoja")
+        if alias_f not in hojas:
+            continue
+        modelo_f  = nombre_modelo(alias_f)
+        cgrupo_f  = fuente.get("campo_grupo", grupo)
+        cval_f    = fuente.get("campo_valor")
+        destino   = fuente.get("destino")
+        if not (cval_f and destino):
+            continue
+        sumas.append(
+            f"            '{destino}' => (float) \\App\\Models\\{modelo_f}::query()\n"
+            f"                ->where('{cgrupo_f}', $valor)\n"
+            f"                ->sum('{cval_f}'),"
+        )
+    sumas_str = "\n".join(sumas) if sumas else "            // (sin fuentes)"
+
+    return (
+        "    public static function recalcularModelo($valor): self\n"
+        "    {\n"
+        "        $valores = [\n"
+        + sumas_str + "\n"
+        "        ];\n"
+        f"        $registro = static::query()->firstOrNew(['{grupo}' => $valor]);\n"
+        "        foreach ($valores as $k => $v) {\n"
+        "            $registro->$k = $v;\n"
+        "        }\n"
+        "        $registro->save();\n"
+        "        return $registro;\n"
+        "    }\n"
+    )
+
+
 def gen_recalcular_command(modelos_observers: list[str]) -> str:
     """Genera app/Console/Commands/RecalcularTodo.php que llama save() en cada
     registro de los modelos con observer, forzando recálculo de campos derivados."""
@@ -1634,8 +1902,25 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
 
     hojas_generables = {
         a: h for a, h in hojas.items()
-        if h.get("tipo") in ("catalogo", "registros")
+        if h.get("tipo") in ("catalogo", "registros", "agregado")
     }
+
+    # Detectar cascadas: por cada hoja "agregado" con fuentes, anotar en
+    # cada hoja fuente un _cascadas[] que el observer leerá. Mutación en
+    # memoria sólo, no toca el JSON en disco.
+    for alias_agg, hoja_agg in hojas.items():
+        if hoja_agg.get("tipo") != "agregado":
+            continue
+        modelo_agg = nombre_modelo(alias_agg)
+        for fuente in hoja_agg.get("fuentes", []):
+            alias_fuente = fuente.get("hoja")
+            if alias_fuente not in hojas_generables:
+                continue
+            hoja_f = hojas_generables[alias_fuente]
+            hoja_f.setdefault("_cascadas", []).append({
+                "modelo_destino": modelo_agg,
+                "campo_grupo":    fuente.get("campo_grupo", "modelo"),
+            })
 
     # 1. Migraciones
     if not solo or solo == "migraciones":
@@ -1703,7 +1988,7 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
     modelos_con_observer = []
     if not solo or solo in ("modelos", "observers"):
         for alias, cfg_hoja in hojas_generables.items():
-            obs = gen_observer(alias, cfg_hoja)
+            obs = gen_observer(alias, cfg_hoja, cfg)
             if obs is None:
                 continue
             modelo_n = nombre_modelo(alias)

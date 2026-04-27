@@ -79,7 +79,7 @@
         "fecha_contacto": "H",
         "observaciones": "I"
       },
-      "identificador": "id"
+      "identificador": "nombre"
     },
     "pedidos": {
       "nombre": "📋 Pedidos",
@@ -89,15 +89,22 @@
         "n_pedido": "A",
         "fecha": "B",
         "cliente": "C",
-        "whatsapp": "D",
-        "ciudad": "E",
         "sku": "F",
         "producto": "G",
         "categoria": "H",
-        "cantidad": "I"
+        "cantidad": "I",
+        "precio_unit": "J",
+        "f_entrega": "Q"
       },
       "identificador": "n_pedido",
-      "formato_id": "KDO-{:03d}"
+      "formato_id": "KDO-{:03d}",
+      "campos_accessor": ["whatsapp", "ciudad"],
+      "snapshot_at_create": [
+        "precio_unit",
+        "producto",
+        "categoria",
+        {"campo": "f_entrega", "desde": "sku", "campo_padre": "tiempo_produccion", "fn": "fecha_plus_dias", "base": "fecha"}
+      ]
     },
     "proveedores": {
       "nombre": "🏪 Proveedores",
