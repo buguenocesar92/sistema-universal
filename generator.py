@@ -2511,9 +2511,9 @@ def _crear_base_laravel(output_dir: str, empresa: str, cfg: dict) -> bool:
     print("  ✓ Laravel instalado")
 
     # 2. composer require filament
-    print("  🎛️  Instalando Filament 3 ...")
+    print("  🎛️  Instalando Filament 3 y extensiones Spatie ...")
     r = subprocess.run(
-        ["composer", "require", "filament/filament:^4.0", "--no-interaction", "--quiet"],
+        ["composer", "require", "filament/filament:^4.0", "spatie/laravel-permission", "spatie/laravel-activitylog", "--no-interaction", "--quiet"],
         cwd=output_dir, capture_output=True, text=True
     )
     if r.returncode != 0:
@@ -2841,6 +2841,17 @@ def generar(empresa: str = None, output_dir: str = "./laravel_output", preview: 
             print(f"  ✓ BD {db_name} creada")
         except Exception as e:
             print(f"  ⚠️  No se pudo crear la BD: {e}")
+
+        # Publicar migraciones de Spatie (v24b)
+        subprocess.run(
+            ["php", "artisan", "vendor:publish", "--provider=Spatie\\Permission\\PermissionServiceProvider"],
+            cwd=output_dir, capture_output=True
+        )
+        subprocess.run(
+            ["php", "artisan", "vendor:publish", "--provider=Spatie\\Activitylog\\ActivitylogServiceProvider", "--tag=activitylog-migrations"],
+            cwd=output_dir, capture_output=True
+        )
+
         # Migrar
         r = subprocess.run(
             ["php", "artisan", "migrate:fresh", "--force"],
