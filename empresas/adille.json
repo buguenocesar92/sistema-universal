@@ -101,7 +101,26 @@
         "quincena_pagada": "L",
         "saldo": "M"
       },
-      "identificador": "trabajador"
+      "identificador": "trabajador",
+      "auto_aggregate": [
+        {"campo": "dias_trabajados", "modelo": "Asistencia",   "where_match": ["trabajador"], "where_extra": [["mes","2026-03"],["estado","A"]], "fn": "count"},
+        {"campo": "faltas",          "modelo": "Asistencia",   "where_match": ["trabajador"], "where_extra": [["mes","2026-03"],["estado","F"]], "fn": "count"},
+        {"campo": "quincena_pagada", "modelo": "PagoQuincena", "where_match": ["trabajador"], "where_extra": [["mes","2026-03"]],                "fn": "sum:monto"}
+      ]
+    },
+    "control_personal": {
+      "tipo": "matriz_asistencia",
+      "nombre": "CONTROL PERSONAL",
+      "fila_inicio": 5,
+      "fila_fin": 18,
+      "col_codigo_obra": "B",
+      "col_obra": "C",
+      "col_trabajador": "D",
+      "cols_quincena1": ["E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S"],
+      "col_pago_quincena": "T",
+      "cols_quincena2": ["U","V","W","X","Y","Z","AA","AB","AC","AD","AE","AF","AG"],
+      "col_pago_liquidacion": "AH",
+      "mes_actual": "2026-03"
     },
     "bencina": {
       "nombre": "BENCINA Y TRANSPORTE",

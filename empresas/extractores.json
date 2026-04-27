@@ -15,6 +15,11 @@
     "iva": 0.19,
     "moneda": "CLP"
   },
+  "sinonimos_modelo": {
+    "25W":   ["EXT-25W", "25w", "25W"],
+    "60W":   ["EXT-60W", "60w", "60W"],
+    "60W E": ["EXT-60W E", "60W E", "60w e"]
+  },
   "hojas": {
     "ventas": {
       "nombre": "Control de Ventas",

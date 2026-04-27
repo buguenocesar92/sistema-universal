@@ -14,6 +14,40 @@ def col_letra_a_num(letra):
         result = result * 26 + (ord(c) - ord('A') + 1)
     return result
 
+def _construir_mapa_sinonimos(cfg: dict) -> dict:
+    """Convierte cfg.sinonimos_modelo {canonico: [variantes]} en un mapa
+    plano {variante: canonico, canonico: canonico} para lookup rápido."""
+    mapa = {}
+    for canonico, variantes in (cfg.get("sinonimos_modelo") or {}).items():
+        mapa[canonico] = canonico
+        for var in variantes:
+            mapa[var] = canonico
+    return mapa
+
+
+def _hojas_que_alimentan_agregado(cfg: dict) -> dict:
+    """Devuelve {alias_hoja: campo_grupo_a_canonizar}.
+
+    Para cada hoja tipo "agregado": tanto sus fuentes (el campo_grupo
+    en el origen) como la hoja agregada misma (su identificador o
+    agrupar_por) deben canonizarse para evitar duplicados.
+    """
+    mapa = {}
+    for alias, hoja in cfg.get("hojas", {}).items():
+        if hoja.get("tipo") != "agregado":
+            continue
+        # La hoja agregada misma: canoniza su agrupar_por / identificador.
+        campo_propio = hoja.get("agrupar_por") or hoja.get("identificador")
+        if campo_propio:
+            mapa[alias] = campo_propio
+        for fuente in hoja.get("fuentes", []):
+            alias_f  = fuente.get("hoja")
+            campo_g  = fuente.get("campo_grupo")
+            if alias_f and campo_g:
+                mapa[alias_f] = campo_g
+    return mapa
+
+
 def importar(empresa: str, laravel_dir: str):
     base = os.path.dirname(os.path.abspath(__file__))
     cfg_path = os.path.join(base, "empresas", f"{empresa}.json")
@@ -22,6 +56,12 @@ def importar(empresa: str, laravel_dir: str):
 
     excel_path = os.path.join(base, cfg["fuente"]["archivo"])
     wb = openpyxl.load_workbook(excel_path, data_only=True)
+
+    sinonimos       = _construir_mapa_sinonimos(cfg)
+    canoniza_campos = _hojas_que_alimentan_agregado(cfg)
+    if sinonimos:
+        print(f"  🔁 sinónimos cargados: {len(sinonimos)} mapeos → "
+              f"{set(sinonimos.values())}")
 
     # Leer .env de Laravel para obtener credenciales DB
     env_path = os.path.join(laravel_dir, ".env")
@@ -43,9 +83,99 @@ def importar(empresa: str, laravel_dir: str):
     cursor = conn.cursor()
 
     hojas = cfg["hojas"]
+
+    # Pre-pass: hojas tipo matriz_asistencia → despivota a asistencias + pagos_quincena
+    for alias, hoja_cfg in hojas.items():
+        if hoja_cfg.get("tipo") != "matriz_asistencia":
+            continue
+        nombre_hoja = hoja_cfg["nombre"]
+        ws = next((wb[h] for h in wb.sheetnames if h == nombre_hoja), None)
+        if not ws:
+            print(f"  ⚠️  Hoja '{nombre_hoja}' no encontrada")
+            continue
+        mes        = hoja_cfg.get("mes_actual", "")
+        f_ini      = hoja_cfg.get("fila_inicio", 5)
+        f_fin      = hoja_cfg.get("fila_fin", 18)
+        c_codigo   = col_letra_a_num(hoja_cfg.get("col_codigo_obra", "B"))
+        c_obra     = col_letra_a_num(hoja_cfg.get("col_obra", "C"))
+        c_trab     = col_letra_a_num(hoja_cfg.get("col_trabajador", "D"))
+        cols_q1    = [col_letra_a_num(l) for l in hoja_cfg.get("cols_quincena1", [])]
+        cols_q2    = [col_letra_a_num(l) for l in hoja_cfg.get("cols_quincena2", [])]
+        c_pago_q   = col_letra_a_num(hoja_cfg.get("col_pago_quincena", "T"))
+        c_pago_l   = col_letra_a_num(hoja_cfg.get("col_pago_liquidacion", "AH"))
+
+        n_asis = 0
+        n_pago = 0
+        for fila in range(f_ini, f_fin + 1):
+            trabajador = ws.cell(fila, c_trab).value
+            if trabajador is None or str(trabajador).strip() == "":
+                continue
+            trabajador = str(trabajador).strip()
+            obra       = ws.cell(fila, c_obra).value
+            codigo_obra = ws.cell(fila, c_codigo).value
+
+            # Despivot quincena1 → días 1..15 del mes
+            for offset, c in enumerate(cols_q1, start=1):
+                v = ws.cell(fila, c).value
+                if v is None or str(v).strip() == "":
+                    continue
+                estado = str(v).strip().upper()[:2]
+                fecha = f"{mes}-{offset:02d}"
+                try:
+                    cursor.execute(
+                        "INSERT IGNORE INTO asistencias "
+                        "(trabajador, obra, codigo_obra, fecha, mes, estado, created_at, updated_at) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,NOW(),NOW())",
+                        [trabajador, obra, codigo_obra, fecha, mes, estado]
+                    )
+                    n_asis += 1
+                except Exception:
+                    pass
+
+            # Despivot quincena2 → días 16..(15+len)
+            for offset, c in enumerate(cols_q2, start=16):
+                v = ws.cell(fila, c).value
+                if v is None or str(v).strip() == "":
+                    continue
+                estado = str(v).strip().upper()[:2]
+                fecha = f"{mes}-{offset:02d}"
+                try:
+                    cursor.execute(
+                        "INSERT IGNORE INTO asistencias "
+                        "(trabajador, obra, codigo_obra, fecha, mes, estado, created_at, updated_at) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,NOW(),NOW())",
+                        [trabajador, obra, codigo_obra, fecha, mes, estado]
+                    )
+                    n_asis += 1
+                except Exception:
+                    pass
+
+            # Pagos quincena + liquidación
+            for periodo, col in [("quincena", c_pago_q), ("liquidacion", c_pago_l)]:
+                v = ws.cell(fila, col).value
+                if v is None:
+                    continue
+                try:
+                    monto = float(v)
+                except (TypeError, ValueError):
+                    continue
+                try:
+                    cursor.execute(
+                        "INSERT IGNORE INTO pagos_quincena "
+                        "(trabajador, mes, periodo, monto, created_at, updated_at) "
+                        "VALUES (%s,%s,%s,%s,NOW(),NOW())",
+                        [trabajador, mes, periodo, monto]
+                    )
+                    n_pago += 1
+                except Exception:
+                    pass
+
+        conn.commit()
+        print(f"  ✓ matriz {nombre_hoja}: {n_asis} asistencias, {n_pago} pagos importados")
+
     for alias, hoja_cfg in hojas.items():
         tipo = hoja_cfg.get("tipo")
-        if tipo not in ("catalogo", "registros"):
+        if tipo not in ("catalogo", "registros", "agregado"):
             continue
 
         nombre_hoja = hoja_cfg["nombre"]
@@ -109,7 +239,11 @@ def importar(empresa: str, laravel_dir: str):
                     valores[ident] = ultimo_ident
                 else:
                     # 3) Identificador es header de totales exacto
-                    if str(ident_val).strip().upper() in SKIP_EXACT:
+                    s_ident = str(ident_val).strip()
+                    if s_ident.upper() in SKIP_EXACT:
+                        continue
+                    # 3b) Notas a pie / fórmulas explicativas: tienen "=" o son muy largas
+                    if "=" in s_ident or len(s_ident) > 50:
                         continue
                     ultimo_ident = ident_val
 
@@ -117,6 +251,16 @@ def importar(empresa: str, laravel_dir: str):
             primer_val = str(valores.get(ident) if ident else list(valores.values())[0] or "").strip()
             if primer_val.startswith("="):
                 continue
+
+            # 5) Canonización de modelo: si esta hoja alimenta a un agregado,
+            # mapear el campo_grupo de variante → canónico vía sinonimos.
+            campo_canonizar = canoniza_campos.get(alias)
+            if campo_canonizar and sinonimos:
+                v = valores.get(campo_canonizar)
+                if v is not None:
+                    s = str(v).strip()
+                    if s in sinonimos:
+                        valores[campo_canonizar] = sinonimos[s]
 
             # Convertir fechas Excel (datetime → string)
             import datetime as _dt

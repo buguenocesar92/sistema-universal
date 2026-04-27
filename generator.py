@@ -637,6 +637,7 @@ def gen_modelo(alias: str, cfg_hoja: dict, empresa_cfg: dict, relaciones=None, f
         or bool(formato_id and ident and ident in cols)
         or bool(cfg_hoja.get("snapshot_at_create"))
         or bool(cfg_hoja.get("_cascadas"))
+        or bool(cfg_hoja.get("auto_aggregate"))
     )
     observer_use   = ""
     observer_attr  = ""
@@ -745,7 +746,11 @@ def gen_observer(alias: str, cfg_hoja: dict, empresa_cfg: dict | None = None) ->
     # disparar Stock::recalcularModelo() en saved/deleted.
     cascadas = cfg_hoja.get("_cascadas", []) or []
 
-    if not aplicables and not auto_id and not snapshots and not cascadas:
+    # Auto-aggregate: campos que se rellenan desde queries a otras tablas.
+    # Se ejecuta ANTES de recalcular() para que los campos derivados las usen.
+    auto_agg = cfg_hoja.get("auto_aggregate", []) or []
+
+    if not aplicables and not auto_id and not snapshots and not cascadas and not auto_agg:
         return None
 
     modelo = nombre_modelo(alias)
@@ -832,6 +837,50 @@ def gen_observer(alias: str, cfg_hoja: dict, empresa_cfg: dict | None = None) ->
             "    }\n"
         )
 
+    # Bloque auto_aggregate: queries a otras tablas para llenar campos.
+    aggregate_block = ""
+    if auto_agg:
+        partes = []
+        for agg in auto_agg:
+            campo  = agg["campo"]
+            modelo_dest = agg["modelo"]
+            wm = agg.get("where_match", [])
+            we = agg.get("where_extra", [])
+            fn = agg.get("fn", "count")
+
+            wheres_php = ""
+            for c in wm:
+                wheres_php += f"->where('{c}', $model->{c})"
+            for w in we:
+                if isinstance(w, list) and len(w) >= 2:
+                    val = w[1]
+                    if isinstance(val, (int, float)):
+                        val_php = str(val)
+                    else:
+                        val_php = "'" + str(val).replace("'", "\\'") + "'"
+                    wheres_php += f"->where('{w[0]}', {val_php})"
+
+            if fn == "count":
+                expr = f"\\App\\Models\\{modelo_dest}::query(){wheres_php}->count()"
+            elif fn.startswith("sum:"):
+                campo_v = fn.split(":", 1)[1]
+                expr = f"(float) \\App\\Models\\{modelo_dest}::query(){wheres_php}->sum('{campo_v}')"
+            elif fn.startswith("avg:"):
+                campo_v = fn.split(":", 1)[1]
+                expr = f"(float) \\App\\Models\\{modelo_dest}::query(){wheres_php}->avg('{campo_v}')"
+            else:
+                expr = "0"
+
+            partes.append(f"        $model->{campo} = {expr};")
+
+        aggregate_block = (
+            "\n"
+            f"    protected function aggregate({modelo} $model): void\n"
+            "    {\n"
+            + "\n".join(partes) + "\n"
+            "    }\n"
+        )
+
     # Bloque cascada: en saved/deleted dispara recálculo del agregado destino.
     cascada_block = ""
     cascada_hooks = []
@@ -861,13 +910,22 @@ def gen_observer(alias: str, cfg_hoja: dict, empresa_cfg: dict | None = None) ->
         creating_calls.append("        $this->creatingAutoId($model);")
     if snapshot_block:
         creating_calls.append("        $this->creatingSnapshot($model);")
+    if aggregate_block:
+        creating_calls.append("        $this->aggregate($model);")
     if aplicables:
         creating_calls.append("        $this->recalcular($model);")
     if not creating_calls:
         creating_calls = ["        // (nada que hacer al crear)"]
     creating_body = "\n".join(creating_calls)
 
-    updating_body = "        $this->recalcular($model);" if aplicables else "        // (sin recálculo en update)"
+    updating_calls = []
+    if aggregate_block:
+        updating_calls.append("        $this->aggregate($model);")
+    if aplicables:
+        updating_calls.append("        $this->recalcular($model);")
+    if not updating_calls:
+        updating_calls = ["        // (sin recálculo en update)"]
+    updating_body = "\n".join(updating_calls)
 
     return (
         "<?php\n\n"
@@ -893,6 +951,7 @@ def gen_observer(alias: str, cfg_hoja: dict, empresa_cfg: dict | None = None) ->
         "    }\n"
         + auto_id_block
         + snapshot_block
+        + aggregate_block
         + cascada_block
         + "}\n"
     )
@@ -1619,6 +1678,215 @@ def gen_filament_widget(cfg: dict) -> str:
     )
 
 
+def gen_archivos_matriz_asistencia(idx_base: int) -> dict:
+    """Genera migrations + modelos + Filament Resources + Pages para
+    tablas auxiliares de matriz_asistencia (asistencias, pagos_quincena).
+
+    Devuelve {ruta: contenido} listo para inyectar en el dict archivos.
+    Las tablas son fijas — no dependen del JSON de la matriz; solo de
+    su existencia.
+    """
+    archivos = {}
+
+    # 1) Migración asistencias
+    mig_a_name = f"2026_01_01_{idx_base:06d}_create_asistencias_table"
+    archivos[f"database/migrations/{mig_a_name}.php"] = (
+        "<?php\n\n"
+        "use Illuminate\\Database\\Migrations\\Migration;\n"
+        "use Illuminate\\Database\\Schema\\Blueprint;\n"
+        "use Illuminate\\Support\\Facades\\Schema;\n\n"
+        "return new class extends Migration\n"
+        "{\n"
+        "    public function up(): void\n"
+        "    {\n"
+        "        Schema::create('asistencias', function (Blueprint $table) {\n"
+        "            $table->id();\n"
+        "            $table->string('trabajador', 100)->index();\n"
+        "            $table->string('obra', 50)->nullable();\n"
+        "            $table->string('codigo_obra', 20)->nullable();\n"
+        "            $table->date('fecha')->index();\n"
+        "            $table->string('mes', 7)->index(); // 'YYYY-MM'\n"
+        "            $table->string('estado', 2)->index(); // A | F | L | ''\n"
+        "            $table->timestamps();\n"
+        "            $table->unique(['trabajador','fecha']);\n"
+        "        });\n"
+        "    }\n\n"
+        "    public function down(): void\n"
+        "    {\n"
+        "        Schema::dropIfExists('asistencias');\n"
+        "    }\n"
+        "};\n"
+    )
+
+    # 2) Migración pagos_quincena
+    mig_p_name = f"2026_01_01_{idx_base+1:06d}_create_pagos_quincena_table"
+    archivos[f"database/migrations/{mig_p_name}.php"] = (
+        "<?php\n\n"
+        "use Illuminate\\Database\\Migrations\\Migration;\n"
+        "use Illuminate\\Database\\Schema\\Blueprint;\n"
+        "use Illuminate\\Support\\Facades\\Schema;\n\n"
+        "return new class extends Migration\n"
+        "{\n"
+        "    public function up(): void\n"
+        "    {\n"
+        "        Schema::create('pagos_quincena', function (Blueprint $table) {\n"
+        "            $table->id();\n"
+        "            $table->string('trabajador', 100)->index();\n"
+        "            $table->string('mes', 7)->index();\n"
+        "            $table->string('periodo', 20); // 'quincena' | 'liquidacion'\n"
+        "            $table->decimal('monto', 15, 2)->default(0);\n"
+        "            $table->timestamps();\n"
+        "            $table->unique(['trabajador','mes','periodo']);\n"
+        "        });\n"
+        "    }\n\n"
+        "    public function down(): void\n"
+        "    {\n"
+        "        Schema::dropIfExists('pagos_quincena');\n"
+        "    }\n"
+        "};\n"
+    )
+
+    # 3) Modelo Asistencia
+    archivos["app/Models/Asistencia.php"] = (
+        "<?php\n\n"
+        "namespace App\\Models;\n\n"
+        "use Illuminate\\Database\\Eloquent\\Model;\n\n"
+        "class Asistencia extends Model\n"
+        "{\n"
+        "    protected $table = 'asistencias';\n"
+        "    protected $fillable = ['trabajador','obra','codigo_obra','fecha','mes','estado'];\n"
+        "    protected $casts = ['fecha' => 'date'];\n"
+        "}\n"
+    )
+
+    # 4) Modelo PagoQuincena
+    archivos["app/Models/PagoQuincena.php"] = (
+        "<?php\n\n"
+        "namespace App\\Models;\n\n"
+        "use Illuminate\\Database\\Eloquent\\Model;\n\n"
+        "class PagoQuincena extends Model\n"
+        "{\n"
+        "    protected $table = 'pagos_quincena';\n"
+        "    protected $fillable = ['trabajador','mes','periodo','monto'];\n"
+        "    protected $casts = ['monto' => 'decimal:2'];\n"
+        "}\n"
+    )
+
+    # 5) Filament Resources básicos
+    for modelo, slug, plural in [("Asistencia","asistencias","Asistencias"),
+                                  ("PagoQuincena","pagos-quincena","Pagos Quincena")]:
+        ns_r = "App\\Filament\\Resources\\"
+        archivos[f"app/Filament/Resources/{modelo}Resource.php"] = (
+            "<?php\n\n"
+            "namespace App\\Filament\\Resources;\n\n"
+            f"use App\\Filament\\Resources\\{modelo}Resource\\Pages;\n"
+            f"use App\\Models\\{modelo};\n"
+            "use Filament\\Forms;\n"
+            "use Filament\\Schemas\\Schema;\n"
+            "use Filament\\Resources\\Resource;\n"
+            "use Filament\\Tables;\n"
+            "use Filament\\Tables\\Table;\n\n"
+            f"class {modelo}Resource extends Resource\n"
+            "{\n"
+            f"    protected static ?string $model = {modelo}::class;\n"
+            "    protected static \\BackedEnum|string|null $navigationIcon = 'heroicon-o-calendar-days';\n"
+            f"    protected static ?string $navigationLabel = '{plural}';\n"
+            f"    protected static ?string $pluralModelLabel = '{plural}';\n\n"
+            "    public static function form(Schema $schema): Schema\n"
+            "    {\n"
+            "        return $schema->components([\n"
+            "            Forms\\Components\\TextInput::make('trabajador')->required(),\n"
+            + ("            Forms\\Components\\DatePicker::make('fecha')->required()->native(false),\n"
+               "            Forms\\Components\\TextInput::make('mes')->placeholder('YYYY-MM'),\n"
+               "            Forms\\Components\\TextInput::make('estado')->maxLength(2)->placeholder('A | F | L'),\n"
+               "            Forms\\Components\\TextInput::make('obra'),\n"
+               if modelo == "Asistencia" else
+               "            Forms\\Components\\TextInput::make('mes')->placeholder('YYYY-MM'),\n"
+               "            Forms\\Components\\Select::make('periodo')->options(['quincena'=>'Quincena','liquidacion'=>'Liquidación']),\n"
+               "            Forms\\Components\\TextInput::make('monto')->numeric()->prefix('$'),\n")
+            + "        ]);\n"
+            "    }\n\n"
+            "    public static function table(Table $table): Table\n"
+            "    {\n"
+            "        return $table\n"
+            "            ->columns([\n"
+            "                Tables\\Columns\\TextColumn::make('trabajador')->searchable()->sortable(),\n"
+            + ("                Tables\\Columns\\TextColumn::make('fecha')->date('d/m/Y')->sortable(),\n"
+               "                Tables\\Columns\\TextColumn::make('mes')->sortable(),\n"
+               "                Tables\\Columns\\TextColumn::make('estado')->badge(),\n"
+               "                Tables\\Columns\\TextColumn::make('obra')->sortable(),\n"
+               if modelo == "Asistencia" else
+               "                Tables\\Columns\\TextColumn::make('mes')->sortable(),\n"
+               "                Tables\\Columns\\TextColumn::make('periodo')->badge(),\n"
+               "                Tables\\Columns\\TextColumn::make('monto')->money('clp', divideBy: 1, locale: 'es_CL')->sortable(),\n")
+            + "            ])\n"
+            "            ->filters([])\n"
+            "            ->actions([\n"
+            "                \\Filament\\Actions\\EditAction::make(),\n"
+            "                \\Filament\\Actions\\DeleteAction::make(),\n"
+            "            ])\n"
+            "            ->bulkActions([\n"
+            "                \\Filament\\Actions\\BulkActionGroup::make([\n"
+            "                    \\Filament\\Actions\\DeleteBulkAction::make(),\n"
+            "                ]),\n"
+            "            ]);\n"
+            "    }\n\n"
+            "    public static function getPages(): array\n"
+            "    {\n"
+            "        return [\n"
+            f"            'index'  => Pages\\List{modelo}s::route('/'),\n"
+            f"            'create' => Pages\\Create{modelo}::route('/create'),\n"
+            f"            'edit'   => Pages\\Edit{modelo}::route('/{{record}}/edit'),\n"
+            "        ];\n"
+            "    }\n"
+            "}\n"
+        )
+
+        # Pages básicas
+        archivos[f"app/Filament/Resources/{modelo}Resource/Pages/List{modelo}s.php"] = (
+            "<?php\n\n"
+            f"namespace App\\Filament\\Resources\\{modelo}Resource\\Pages;\n\n"
+            f"use App\\Filament\\Resources\\{modelo}Resource;\n"
+            "use Filament\\Actions;\n"
+            "use Filament\\Resources\\Pages\\ListRecords;\n\n"
+            f"class List{modelo}s extends ListRecords\n"
+            "{\n"
+            f"    protected static string $resource = {modelo}Resource::class;\n\n"
+            "    protected function getHeaderActions(): array\n"
+            "    {\n"
+            "        return [Actions\\CreateAction::make()];\n"
+            "    }\n"
+            "}\n"
+        )
+        archivos[f"app/Filament/Resources/{modelo}Resource/Pages/Create{modelo}.php"] = (
+            "<?php\n\n"
+            f"namespace App\\Filament\\Resources\\{modelo}Resource\\Pages;\n\n"
+            f"use App\\Filament\\Resources\\{modelo}Resource;\n"
+            "use Filament\\Resources\\Pages\\CreateRecord;\n\n"
+            f"class Create{modelo} extends CreateRecord\n"
+            "{\n"
+            f"    protected static string $resource = {modelo}Resource::class;\n"
+            "}\n"
+        )
+        archivos[f"app/Filament/Resources/{modelo}Resource/Pages/Edit{modelo}.php"] = (
+            "<?php\n\n"
+            f"namespace App\\Filament\\Resources\\{modelo}Resource\\Pages;\n\n"
+            f"use App\\Filament\\Resources\\{modelo}Resource;\n"
+            "use Filament\\Actions;\n"
+            "use Filament\\Resources\\Pages\\EditRecord;\n\n"
+            f"class Edit{modelo} extends EditRecord\n"
+            "{\n"
+            f"    protected static string $resource = {modelo}Resource::class;\n\n"
+            "    protected function getHeaderActions(): array\n"
+            "    {\n"
+            "        return [Actions\\DeleteAction::make()];\n"
+            "    }\n"
+            "}\n"
+        )
+
+    return archivos
+
+
 def gen_metodo_recalcular_modelo(alias_agregado: str, cfg_hoja: dict,
                                   empresa_cfg: dict) -> str:
     """Genera el método estático Stock::recalcularModelo($valor) que se
@@ -1693,6 +1961,9 @@ def gen_recalcular_command(modelos_observers: list[str]) -> str:
         "            }\n"
         "            $count = 0;\n"
         "            $clase::query()->lazy()->each(function ($r) use (&$count) {\n"
+        "                // Forzar dirty para que el observer dispare en cada registro,\n"
+        "                // aunque el record no haya cambiado desde el último save().\n"
+        "                $r->updated_at = now();\n"
         "                $r->save();\n"
         "                $count++;\n"
         "            });\n"
@@ -2044,6 +2315,13 @@ def generar(empresa: str, output_dir: str, preview: bool = False, solo: str = No
         nombre_arch = "app/Filament/Widgets/KraftDoStatsWidget.php"
         archivos[nombre_arch] = gen_filament_widget(cfg)
         print(f"  📊 {nombre_arch}")
+
+    # 4b. Tablas auxiliares para hojas tipo "matriz_asistencia"
+    if any(h.get("tipo") == "matriz_asistencia" for h in hojas.values()):
+        idx_base = len(hojas_generables) + 100  # después de las migrations regulares
+        for path, contenido in gen_archivos_matriz_asistencia(idx_base).items():
+            archivos[path] = contenido
+            print(f"  📅 {path}")
 
     # 5. Script de instalación
     archivos["install.sh"] = gen_install_script(empresa, hojas_generables)
