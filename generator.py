@@ -1396,6 +1396,78 @@ def gen_seeder(alias: str, cfg_hoja: dict) -> str:
     )
 
 
+def gen_roles_seeder(cfg: dict) -> str:
+    """Genera un Seeder para Roles y Permisos de Spatie."""
+    roles = cfg.get("roles", {})
+    if not roles:
+        return ""
+
+    perms_set = set()
+    for p_list in roles.values():
+        for p in p_list:
+            perms_set.add(p)
+
+    perms_str = "\n".join([f"        Permission::create(['name' => '{p}']);" for p in sorted(list(perms_set))])
+
+    roles_blocks = []
+    for role, p_list in roles.items():
+        roles_blocks.append(f"        $role = Role::create(['name' => '{role}']);")
+        if p_list:
+            p_list_str = ", ".join([f"'{p}'" for p in p_list])
+            roles_blocks.append(f"        $role->givePermissionTo([{p_list_str}]);")
+
+    roles_str = "\n".join(roles_blocks)
+
+    return f"""<?php
+
+namespace Database\\Seeders;
+
+use Illuminate\\Database\\Seeder;
+use Spatie\\Permission\\Models\\Role;
+use Spatie\\Permission\\Models\\Permission;
+
+class RolesAndPermissionsSeeder extends Seeder
+{{
+    public function run(): void
+    {{
+        // Reset cached roles and permissions
+        app()[\\Spatie\\Permission\\PermissionRegistrar::class]->forgetCachedPermissions();
+
+        // Crear permisos
+{perms_str}
+
+        // Crear roles y asignar permisos
+{roles_str}
+    }}
+}}
+"""
+
+
+def gen_database_seeder(hojas: dict, has_roles: bool = False) -> str:
+    """Genera el DatabaseSeeder principal llamando a todos los seeders."""
+    calls = []
+    if has_roles:
+        calls.append("        $this->call(RolesAndPermissionsSeeder::class);")
+    for alias in hojas.keys():
+        calls.append(f"        $this->call({nombre_modelo(alias)}Seeder::class);")
+
+    calls_str = "\n".join(calls)
+    return f"""<?php
+
+namespace Database\\Seeders;
+
+use Illuminate\\Database\\Seeder;
+
+class DatabaseSeeder extends Seeder
+{{
+    public function run(): void
+    {{
+{calls_str}
+    }}
+}}
+"""
+
+
 
 def gen_filament_pages(alias: str, cfg_hoja: dict) -> dict:
     """Genera las 3 Pages que necesita cada Filament Resource."""
@@ -2154,8 +2226,10 @@ def gen_install_script(empresa: str, hojas: dict) -> str:
         "composer require leandrocfe/filament-apex-charts\\n"
         "composer require spatie/laravel-medialibrary\\n"
         "composer require filament/spatie-laravel-media-library-plugin\\n"
+        "composer require spatie/laravel-permission\\n"
         'echo "✅ Dependencias + plugins Filament instalados"\n\n'
         "# 2. Migraciones\n"
+        "php artisan vendor:publish --provider=\"Spatie\\Permission\\PermissionServiceProvider\"\n"
         "php artisan migrate --force\n"
         'echo "✅ Tablas creadas"\n\n'
         "# 3. Seeders (datos de ejemplo)\n"
@@ -2453,11 +2527,23 @@ def generar(empresa: str = None, output_dir: str = "./laravel_output", preview: 
 
     # 3c. Seeders
     if not solo or solo in ("modelos", "seeders"):
+        # Roles y Permisos (v24b)
+        roles_content = gen_roles_seeder(cfg)
+        if roles_content:
+            archivos["database/seeders/RolesAndPermissionsSeeder.php"] = roles_content
+            print("  🌱 database/seeders/RolesAndPermissionsSeeder.php")
+
         for alias, cfg_hoja in hojas_generables.items():
             modelo_n = nombre_modelo(alias)
             nombre_arch = f"database/seeders/{modelo_n}Seeder.php"
             archivos[nombre_arch] = gen_seeder(alias, cfg_hoja)
             print(f"  🌱 {nombre_arch}")
+
+        # DatabaseSeeder principal
+        archivos["database/seeders/DatabaseSeeder.php"] = gen_database_seeder(
+            hojas_generables, has_roles=bool(roles_content)
+        )
+        print("  🌱 database/seeders/DatabaseSeeder.php")
 
     # 3d. Filament Pages
     if not solo or solo in ("filament", "pages"):

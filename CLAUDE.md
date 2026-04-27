@@ -21,6 +21,16 @@ Sistema de generación de software basado en metadatos (JSON) que transforma est
 - **Extractores (`extractores.json`)**: Gestión de ciclo de vida de producto: Importación -> Stock -> Venta -> Promoción.
 - **KraftDo (`kraftdo.json`)**: Sistema core de pedidos NFC, gestión de clientes y catálogo dinámico.
 
+### Bloque de Roles y Permisos (v24b)
+Los JSON pueden incluir un bloque `"roles"` para auto-generar el Seeder de permisos Spatie:
+```json
+"roles": {
+  "admin": ["manage_users", "view_reports", "delete_records"],
+  "vendedor": ["create_orders", "view_products"],
+  "supervisor": ["view_reports", "approve_orders"]
+}
+```
+
 ## Comandos de Operación
 ```bash
 # Generación de sistemas (orden recomendado)
