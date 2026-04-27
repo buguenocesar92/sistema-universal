@@ -732,7 +732,7 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
                 "            Forms\\Components\\Select::make('" + campo + "')\n"
                 "                ->label('" + label + "')\n"
                 "                ->options(fn() => \\App\\Models\\" + modelo_dest
-                + "::query()->pluck('" + campo_dest + "', '" + campo_dest + "')->toArray())\n"
+                + "::query()->pluck('" + campo_dest + "', '" + campo_dest + "')->filter()->toArray())\n"
                 "                ->searchable()\n"
                 "                ->preload()"
                 + req + ","
@@ -855,7 +855,7 @@ def gen_filament_resource(alias: str, cfg_hoja: dict, empresa_cfg: dict,
     if "estado" in cols:
         filters_lines.append(
             "                Tables\\Filters\\SelectFilter::make('estado')\n"
-            "                    ->options(fn() => " + ns_models + modelo + "::distinct()->pluck('estado', 'estado')->toArray()),"
+            "                    ->options(fn() => " + ns_models + modelo + "::distinct()->pluck('estado', 'estado')->filter()->toArray()),"
         )
     for campo, valores in enums.items():
         if campo == "estado":
