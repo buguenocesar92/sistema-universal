@@ -54,15 +54,15 @@
       "tipo": "registros",
       "fila_datos": 4,
       "columnas": {
-        "item": "A",
-        "contacto": "B",
-        "empresa": "C",
-        "rut": "D",
-        "modelo": "E",
-        "cantidad": "F",
-        "neto": "G",
-        "iva": "H",
-        "total": "I"
+        "item": "B",
+        "contacto": "C",
+        "empresa": "D",
+        "rut": "E",
+        "modelo": "F",
+        "cantidad": "G",
+        "neto": "H",
+        "iva": "I",
+        "total": "J"
       },
       "identificador": "item"
     },
@@ -71,18 +71,18 @@
       "tipo": "registros",
       "fila_datos": 4,
       "columnas": {
-        "item": "A",
-        "modelo": "B",
-        "unidades": "C",
-        "pi_numero": "D",
-        "empresa": "E",
-        "rut": "F",
-        "factura": "G",
-        "costo_china": "H",
-        "embarcadero": "I",
-        "agente_aduana": "J",
-        "total_neto": "K",
-        "iva_servicio": "L"
+        "item": "B",
+        "modelo": "C",
+        "unidades": "D",
+        "pi_numero": "E",
+        "empresa": "F",
+        "rut": "G",
+        "factura": "H",
+        "costo_china": "I",
+        "embarcadero": "J",
+        "agente_aduana": "K",
+        "total_neto": "L",
+        "iva_servicio": "M"
       },
       "identificador": "item"
     },
@@ -120,7 +120,9 @@
         "publico": "G",
         "costo_stand": "H",
         "contacto": "I",
-        "estado": "J"
+        "estado": "J",
+        "notas": "K",
+        "accion": "L"
       },
       "identificador": "evento"
     },

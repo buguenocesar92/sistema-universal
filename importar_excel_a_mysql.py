@@ -76,32 +76,45 @@ def importar(empresa: str, laravel_dir: str):
 
         col_indices = {campo: col_letra_a_num(letra) for campo, letra in columnas.items()}
         campos = list(columnas.keys())
+        ident   = hoja_cfg.get("identificador")
+
+        # Palabras que, cuando aparecen como VALOR EXACTO del identificador,
+        # marcan filas de header/totales (no datos). Match exacto, no substring,
+        # para no descartar conceptos legítimos como "TOTAL BRUTO" si son
+        # registros de negocio reales — pero sí filtra filas resumen genéricas.
+        SKIP_EXACT = {"TOTALES", "TOTAL", "SUBTOTAL", "INGRESAR DATOS",
+                      "[AUTO]", "[INGRESAR]", "AMARILLO"}
 
         filas_insertadas = 0
+        ultimo_ident = None  # carry-forward: filas continuación heredan el identificador
         for row in range(fila_ini, ws.max_row + 1):
             valores = {}
             for campo, idx in col_indices.items():
                 val = ws.cell(row, idx).value
                 valores[campo] = val
 
-            # Saltar filas completamente vacías
-            if all(v is None for v in valores.values()):
+            # 1) Filas completamente vacías
+            if all(v is None or str(v).strip() == "" for v in valores.values()):
                 continue
 
-            # Saltar filas con más del 70% de valores vacíos
-            total = len(valores)
-            vacios = sum(1 for v in valores.values() if v is None or str(v).strip() == "")
-            if total > 0 and vacios / total > 0.7:
-                continue
+            # 2) Si hay identificador definido
+            if ident:
+                ident_val = valores.get(ident)
+                ident_vacio = ident_val is None or str(ident_val).strip() == ""
+                if ident_vacio:
+                    # Fila continuación: hereda identificador previo si existe.
+                    # Si nunca hubo identificador antes, sí saltar.
+                    if ultimo_ident is None:
+                        continue
+                    valores[ident] = ultimo_ident
+                else:
+                    # 3) Identificador es header de totales exacto
+                    if str(ident_val).strip().upper() in SKIP_EXACT:
+                        continue
+                    ultimo_ident = ident_val
 
-            # Saltar filas con palabras de encabezado/totales en cualquier columna
-            palabras_skip = ["TOTALES", "TOTAL", "SUBTOTAL", "INGRESAR", "AUTO", "AMARILLO"]
-            todos_str = [str(v or "").strip().upper() for v in valores.values()]
-            if any(any(p in v for p in palabras_skip) for v in todos_str):
-                continue
-
-            # Saltar filas que parecen fórmulas o notas (primer valor empieza con =)
-            primer_val = str(list(valores.values())[0] or "").strip()
+            # 4) Skip si el primer valor empieza con "="
+            primer_val = str(valores.get(ident) if ident else list(valores.values())[0] or "").strip()
             if primer_val.startswith("="):
                 continue
 

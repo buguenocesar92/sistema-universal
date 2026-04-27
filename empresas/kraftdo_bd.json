@@ -56,7 +56,11 @@
         "hora_trabajo": "F",
         "costo_total": "G",
         "precio_unit": "H",
-        "precio_mayor": "I"
+        "precio_mayor": "J",
+        "margen_pct": "K",
+        "tiempo_produccion": "M",
+        "estado": "N",
+        "proveedor_id": "O"
       },
       "identificador": "sku"
     },
@@ -92,7 +96,8 @@
         "categoria": "H",
         "cantidad": "I"
       },
-      "identificador": "n_pedido"
+      "identificador": "n_pedido",
+      "formato_id": "KDO-{:03d}"
     },
     "proveedores": {
       "nombre": "🏪 Proveedores",

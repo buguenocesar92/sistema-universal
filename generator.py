@@ -56,14 +56,17 @@ def _slug(s: str) -> str:
     return s or "hoja"
 
 # ── Tipos de columna: inferencia por nombre ─────────────────────────────────
+# Nota: el orden importa. Las reglas más específicas van primero.
 REGLAS_TIPO = [
     # Fechas
     (r"^fecha|^f_|_fecha$|_date$|_at$", "timestamp", "nullable"),
     (r"^updated_at$|^created_at$",       "timestamp", "nullable"),
-    # Montos y precios
-    (r"precio|monto|costo|total|saldo|anticipo|ganancia|ahorro", "decimal:10,2", "default:0"),
-    # Porcentajes y márgenes
-    (r"margen|pct|porcentaje|descuento|^iva$", "decimal:5,4", "default:0"),
+    # Porcentajes y márgenes (deben ir ANTES que la regla monetaria, que es más amplia).
+    # Solo decimal(5,4) cuando es realmente fracción 0..1. NO incluye 'descuento'
+    # (descuento_faltas es monto), ni '^iva$' (iva en ventas es monto).
+    (r"^margen$|^margen_pct$|_pct$|porcentaje", "decimal:5,4", "default:0"),
+    # Montos y precios — incluye iva, descuento_faltas, iva_servicio
+    (r"precio|monto|costo|total|saldo|anticipo|ganancia|ahorro|^iva|descuento|servicio", "decimal:15,2", "default:0"),
     # Cantidades enteras
     (r"^cantidad$|^stock$|^dias|^horas$|^gramos$|_count$|_qty$", "integer", "default:0"),
     # Estado (select)
@@ -547,8 +550,13 @@ def gen_modelo(alias: str, cfg_hoja: dict, empresa_cfg: dict, relaciones=None, f
             if conv.get("php"):
                 accessors_str += "\n\n" + gen_accessors_php(conv["campo"], conv)
 
-    # ¿Tiene observer? (cuando hay reglas de cálculo aplicables)
-    tiene_observer = bool(_calculos_aplicables(cols))
+    # ¿Tiene observer? Cuando hay reglas de cálculo aplicables
+    # o cuando la hoja define formato_id para auto-numeración.
+    formato_id = cfg_hoja.get("formato_id")
+    ident      = cfg_hoja.get("identificador")
+    tiene_observer = bool(_calculos_aplicables(cols)) or bool(
+        formato_id and ident and ident in cols
+    )
     observer_use   = ""
     observer_attr  = ""
     if tiene_observer:
@@ -583,12 +591,20 @@ use Illuminate\\Database\\Eloquent\\Factories\\HasFactory;
 def gen_observer(alias: str, cfg_hoja: dict) -> str | None:
     """Genera un Observer PHP que recalcula campos al guardar.
 
-    Devuelve el contenido PHP, o None si la hoja no tiene reglas aplicables.
+    Devuelve el contenido PHP, o None si la hoja no tiene ni reglas
+    aplicables ni formato_id.
     Usa $model SIN backslash en typehint (regla CLAUDE.md).
+
+    Si la hoja define `formato_id` (ej "KDO-{:03d}"), el observer
+    asigna el siguiente identificador disponible al crear (creating).
     """
-    cols      = cfg_hoja.get("columnas", {})
+    cols       = cfg_hoja.get("columnas", {})
     aplicables = _calculos_aplicables(cols)
-    if not aplicables:
+    formato_id = cfg_hoja.get("formato_id")
+    ident      = cfg_hoja.get("identificador")
+    auto_id    = bool(formato_id and ident and ident in cols)
+
+    if not aplicables and not auto_id:
         return None
 
     modelo = nombre_modelo(alias)
@@ -600,7 +616,38 @@ def gen_observer(alias: str, cfg_hoja: dict) -> str | None:
             f"        // {comentario}\n"
             f"        $model->{regla['campo']} = {regla['formula']};"
         )
-    body = "\n\n".join(bloques)
+    body = "\n\n".join(bloques) if bloques else "        // (sin reglas de cálculo)"
+
+    # Bloque de auto-numeración: en creating, si el identificador está vacío,
+    # buscar el último ID con el patrón y emitir el siguiente.
+    auto_id_block = ""
+    if auto_id:
+        # Convertir patrón Python "{:03d}" a regex y formato sprintf-equivalente
+        # Soportamos formatos tipo "PREFIJO-{:0Nd}".
+        m = re.match(r"^(.*?)\{:0?(\d+)d\}(.*)$", formato_id)
+        if m:
+            prefijo, ancho, sufijo = m.group(1), int(m.group(2)), m.group(3)
+            php_pattern = "/^" + re.escape(prefijo) + r"(\d+)" + re.escape(sufijo) + "$/"
+            php_format  = prefijo + "%0" + str(ancho) + "d" + sufijo
+            auto_id_block = (
+                "\n"
+                f"    public function creatingAutoId({modelo} $model): void\n"
+                "    {\n"
+                f"        if (!empty($model->{ident})) {{\n"
+                "            return;\n"
+                "        }\n"
+                f"        $ultimo = {modelo}::query()\n"
+                f"            ->where('{ident}', 'like', '" + prefijo.replace("'", "\\'") + "%')\n"
+                f"            ->pluck('{ident}')\n"
+                f"            ->map(fn ($v) => preg_match('" + php_pattern + "', (string) $v, $m) ? (int) $m[1] : 0)\n"
+                "            ->max() ?? 0;\n"
+                f"        $model->{ident} = sprintf('" + php_format + "', $ultimo + 1);\n"
+                "    }\n"
+            )
+
+    creating_calls = "        $this->recalcular($model);"
+    if auto_id_block:
+        creating_calls = "        $this->creatingAutoId($model);\n" + creating_calls
 
     return (
         "<?php\n\n"
@@ -614,7 +661,7 @@ def gen_observer(alias: str, cfg_hoja: dict) -> str | None:
         "{\n"
         f"    public function creating({modelo} $model): void\n"
         "    {\n"
-        "        $this->recalcular($model);\n"
+        + creating_calls + "\n"
         "    }\n\n"
         f"    public function updating({modelo} $model): void\n"
         "    {\n"
@@ -624,7 +671,8 @@ def gen_observer(alias: str, cfg_hoja: dict) -> str | None:
         "    {\n"
         + body + "\n"
         "    }\n"
-        "}\n"
+        + auto_id_block
+        + "}\n"
     )
 
 
