@@ -296,8 +296,15 @@ def importar(empresa: str, laravel_dir: str):
         SKIP_EXACT = {"TOTALES", "TOTAL", "SUBTOTAL", "INGRESAR DATOS",
                       "[AUTO]", "[INGRESAR]", "AMARILLO"}
 
-        filas_insertadas = 0
-        ultimo_ident = None  # carry-forward: filas continuación heredan el identificador
+        # v25-fase3: importer incremental con upsert diferencial.
+        # Métricas por hoja: nuevos / actualizados / sin_cambio / errores.
+        import time as _t, hashlib as _hl
+        t0 = _t.time()
+        n_nuevos = n_upd = n_iguales = n_err = 0
+        # Identificador efectivo: si no hay declarado, usar la primera columna.
+        ident_efectivo = ident or (campos[0] if campos else None)
+
+        ultimo_ident = None  # carry-forward
         for row in range(fila_ini, ws.max_row + 1):
             valores = {}
             for campo, idx in col_indices.items():
@@ -366,17 +373,79 @@ def importar(empresa: str, laravel_dir: str):
                 if isinstance(v, (_dt.datetime, _dt.date)):
                     valores[k] = v.strftime("%Y-%m-%d %H:%M:%S") if isinstance(v, _dt.datetime) else v.strftime("%Y-%m-%d")
 
-            placeholders = ", ".join(["%s"] * len(campos))
-            cols_str = ", ".join([f"`{c}`" for c in campos])
-            sql = f"INSERT IGNORE INTO `{tabla_mysql}` ({cols_str}) VALUES ({placeholders})"
+            # Hash determinista de los valores actuales (excluye claves
+            # autogeneradas/timestamps; se usa solo lo del Excel).
+            row_payload = "|".join(
+                f"{c}={'' if valores.get(c) is None else str(valores.get(c))}"
+                for c in campos
+            )
+            row_hash = _hl.md5(row_payload.encode("utf-8")).hexdigest()
+
+            ident_val = valores.get(ident_efectivo) if ident_efectivo else None
+            cur_dict = conn.cursor(dictionary=True)
+            existente = None
+            if ident_val is not None and str(ident_val).strip() != "":
+                try:
+                    cur_dict.execute(
+                        f"SELECT id, _row_hash FROM `{tabla_mysql}` WHERE `{ident_efectivo}` = %s LIMIT 1",
+                        [ident_val]
+                    )
+                    existente = cur_dict.fetchone()
+                except Exception as e:
+                    n_err += 1
+                    cur_dict.close()
+                    continue
+            cur_dict.close()
+
+            # Solo enviamos columnas con valor real para que las NOT NULL
+            # con default no rompan cuando el Excel tiene celda vacía.
+            cols_present = [
+                c for c in campos
+                if valores.get(c) is not None and str(valores.get(c)).strip() != ""
+            ]
             try:
-                cursor.execute(sql, [valores.get(c) for c in campos])
-                filas_insertadas += 1
-            except Exception as e:
-                pass  # columna no existe, skip
+                if existente is None:
+                    cols_with_hash = cols_present + ["_row_hash"]
+                    placeholders = ", ".join(["%s"] * len(cols_with_hash))
+                    cols_str = ", ".join([f"`{c}`" for c in cols_with_hash])
+                    sql = f"INSERT INTO `{tabla_mysql}` ({cols_str}) VALUES ({placeholders})"
+                    cursor.execute(sql, [valores.get(c) for c in cols_present] + [row_hash])
+                    n_nuevos += 1
+                elif existente.get("_row_hash") == row_hash:
+                    n_iguales += 1
+                else:
+                    if not cols_present:
+                        n_iguales += 1
+                    else:
+                        set_cols = ", ".join([f"`{c}`=%s" for c in cols_present]) + ", `_row_hash`=%s"
+                        sql = f"UPDATE `{tabla_mysql}` SET {set_cols} WHERE id=%s"
+                        cursor.execute(
+                            sql,
+                            [valores.get(c) for c in cols_present] + [row_hash, existente["id"]]
+                        )
+                        n_upd += 1
+            except Exception as _e:
+                n_err += 1
+                if n_err <= 1 and os.environ.get("KRAFTDO_DEBUG_IMPORT"):
+                    print(f"      ⚠️  ({tabla_mysql}) {type(_e).__name__}: {str(_e)[:150]}")
 
         conn.commit()
-        print(f"  ✓ {tabla_mysql}: {filas_insertadas} registros importados")
+        duracion_ms = int((_t.time() - t0) * 1000)
+        try:
+            cursor.execute(
+                "INSERT INTO import_logs "
+                "(empresa, alias_hoja, fecha_inicio, fecha_fin, "
+                " nuevos, actualizados, sin_cambio, errores, duracion_ms, "
+                " created_at, updated_at) VALUES (%s,%s,NOW(),NOW(),%s,%s,%s,%s,%s,NOW(),NOW())",
+                [empresa, alias, n_nuevos, n_upd, n_iguales, n_err, duracion_ms]
+            )
+            conn.commit()
+        except Exception:
+            pass  # tabla import_logs ausente: silently skip
+        print(
+            f"  ✓ {tabla_mysql}: {n_iguales} sin cambio | {n_nuevos} nuevos | "
+            f"{n_upd} actualizados | {n_err} errores ({duracion_ms}ms)"
+        )
 
     cursor.close()
     conn.close()

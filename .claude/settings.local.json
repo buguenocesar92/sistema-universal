@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//tmp/kraftdo_bd_test/app/Models/**)",
+      "Read(//tmp/kraftdo_bd_test/app/Filament/**)",
+      "Bash(python3 *)",
+      "Bash(php artisan tinker '--execute= *)",
+      "Bash(php artisan *)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "kraftdo-tools"
+  ]
+}

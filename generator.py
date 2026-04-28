@@ -422,6 +422,7 @@ def gen_migracion(alias: str, cfg_hoja: dict, idx: int) -> str:
                 "            $table->enum('tipo', ['" + tipos_enum + "'])->index();\n"
                 + cols_str + "\n"
                 + ("\n" + meta_col if meta_col else "") + "\n"
+                "            $table->string('_row_hash', 64)->nullable()->index();\n"
                 "            $table->timestamps();\n"
                 "        });\n"
                 "    }\n\n"
@@ -491,6 +492,8 @@ def gen_migracion(alias: str, cfg_hoja: dict, idx: int) -> str:
     for campo in indices_campos:
         if campo not in ("numero", "id"):  # no indexar PKs
             indices += f"\n            $table->index('{campo}');"
+    # Hash de fila para upsert diferencial del importer (v25-fase3)
+    cols_str += "\n            $table->string('_row_hash', 64)->nullable()->index();"
 
     return f"""<?php
 
@@ -1853,6 +1856,132 @@ class {nombre_clase} extends BaseWidget
     return archivos
 
 
+def gen_import_log_migration() -> str:
+    """v25-fase3: tabla de auditoría del importer (incremental)."""
+    return (
+        "<?php\n\n"
+        "use Illuminate\\Database\\Migrations\\Migration;\n"
+        "use Illuminate\\Database\\Schema\\Blueprint;\n"
+        "use Illuminate\\Support\\Facades\\Schema;\n\n"
+        "return new class extends Migration\n"
+        "{\n"
+        "    public function up(): void\n"
+        "    {\n"
+        "        Schema::create('import_logs', function (Blueprint $table) {\n"
+        "            $table->id();\n"
+        "            $table->string('empresa', 100)->index();\n"
+        "            $table->string('alias_hoja', 100)->index();\n"
+        "            $table->dateTime('fecha_inicio')->index();\n"
+        "            $table->dateTime('fecha_fin')->nullable();\n"
+        "            $table->integer('nuevos')->default(0);\n"
+        "            $table->integer('actualizados')->default(0);\n"
+        "            $table->integer('sin_cambio')->default(0);\n"
+        "            $table->integer('errores')->default(0);\n"
+        "            $table->integer('duracion_ms')->default(0);\n"
+        "            $table->text('mensaje')->nullable();\n"
+        "            $table->timestamps();\n"
+        "        });\n"
+        "    }\n\n"
+        "    public function down(): void\n"
+        "    {\n"
+        "        Schema::dropIfExists('import_logs');\n"
+        "    }\n"
+        "};\n"
+    )
+
+
+def gen_import_log_modelo() -> str:
+    """Modelo Eloquent para import_logs."""
+    return (
+        "<?php\n\n"
+        "namespace App\\Models;\n\n"
+        "use Illuminate\\Database\\Eloquent\\Model;\n\n"
+        "class ImportLog extends Model\n"
+        "{\n"
+        "    protected $table = 'import_logs';\n"
+        "    protected $fillable = ['empresa','alias_hoja','fecha_inicio',\n"
+        "        'fecha_fin','nuevos','actualizados','sin_cambio',\n"
+        "        'errores','duracion_ms','mensaje'];\n"
+        "    protected $casts = [\n"
+        "        'fecha_inicio' => 'datetime',\n"
+        "        'fecha_fin'    => 'datetime',\n"
+        "        'nuevos'       => 'integer',\n"
+        "        'actualizados' => 'integer',\n"
+        "        'sin_cambio'   => 'integer',\n"
+        "        'errores'      => 'integer',\n"
+        "        'duracion_ms'  => 'integer',\n"
+        "    ];\n"
+        "}\n"
+    )
+
+
+def gen_import_log_resource() -> dict:
+    """Filament Resource read-only para auditoría de imports."""
+    archivos = {}
+    archivos["app/Filament/Resources/ImportLogResource.php"] = (
+        "<?php\n\n"
+        "namespace App\\Filament\\Resources;\n\n"
+        "use App\\Filament\\Resources\\ImportLogResource\\Pages;\n"
+        "use App\\Models\\ImportLog;\n"
+        "use Filament\\Schemas\\Schema;\n"
+        "use Filament\\Resources\\Resource;\n"
+        "use Filament\\Tables;\n"
+        "use Filament\\Tables\\Table;\n\n"
+        "class ImportLogResource extends Resource\n"
+        "{\n"
+        "    protected static ?string $model = ImportLog::class;\n"
+        "    protected static \\BackedEnum|string|null $navigationIcon = 'heroicon-o-arrow-down-tray';\n"
+        "    protected static ?string $navigationLabel = 'Import Logs';\n"
+        "    protected static ?string $pluralModelLabel = 'Import Logs';\n"
+        "    protected static ?int $navigationSort = 99;\n\n"
+        "    public static function form(Schema $schema): Schema\n"
+        "    {\n"
+        "        return $schema->components([]);\n"
+        "    }\n\n"
+        "    public static function canCreate(): bool { return false; }\n\n"
+        "    public static function table(Table $table): Table\n"
+        "    {\n"
+        "        return $table\n"
+        "            ->defaultSort('fecha_inicio', 'desc')\n"
+        "            ->columns([\n"
+        "                Tables\\Columns\\TextColumn::make('fecha_inicio')\n"
+        "                    ->label('Inicio')->dateTime('d/m/Y H:i:s')->sortable(),\n"
+        "                Tables\\Columns\\TextColumn::make('empresa')->sortable()->searchable(),\n"
+        "                Tables\\Columns\\TextColumn::make('alias_hoja')\n"
+        "                    ->label('Hoja')->sortable()->searchable(),\n"
+        "                Tables\\Columns\\TextColumn::make('nuevos')\n"
+        "                    ->numeric()->color('success')->sortable(),\n"
+        "                Tables\\Columns\\TextColumn::make('actualizados')\n"
+        "                    ->numeric()->color('warning')->sortable(),\n"
+        "                Tables\\Columns\\TextColumn::make('sin_cambio')\n"
+        "                    ->numeric()->color('gray')->sortable(),\n"
+        "                Tables\\Columns\\TextColumn::make('errores')\n"
+        "                    ->numeric()->color('danger')->sortable(),\n"
+        "                Tables\\Columns\\TextColumn::make('duracion_ms')\n"
+        "                    ->label('ms')->numeric()->sortable(),\n"
+        "            ])\n"
+        "            ->actions([])  // read-only\n"
+        "            ->bulkActions([]);\n"
+        "    }\n\n"
+        "    public static function getPages(): array\n"
+        "    {\n"
+        "        return ['index' => Pages\\ListImportLogs::route('/')];\n"
+        "    }\n"
+        "}\n"
+    )
+    archivos["app/Filament/Resources/ImportLogResource/Pages/ListImportLogs.php"] = (
+        "<?php\n\n"
+        "namespace App\\Filament\\Resources\\ImportLogResource\\Pages;\n\n"
+        "use App\\Filament\\Resources\\ImportLogResource;\n"
+        "use Filament\\Resources\\Pages\\ListRecords;\n\n"
+        "class ListImportLogs extends ListRecords\n"
+        "{\n"
+        "    protected static string $resource = ImportLogResource::class;\n"
+        "}\n"
+    )
+    return archivos
+
+
 def gen_archivos_matriz_asistencia(idx_base: int, matriz_cfg: dict | None = None) -> dict:
     """Genera migrations + modelos + Filament Resources + Pages para
     tablas auxiliares de matriz_asistencia (asistencias, pagos_quincena).
@@ -2780,6 +2909,13 @@ def generar(empresa: str = None, output_dir: str = "./laravel_output", preview: 
 
     archivos["routes/console.php"] = gen_console_routes(cfg)
     print(f"  ⏰ routes/console.php")
+
+    # 4a-bis. Tabla import_logs (auditoría incremental, v25-fase3)
+    archivos["database/migrations/0000_00_00_000000_create_import_logs_table.php"] = gen_import_log_migration()
+    archivos["app/Models/ImportLog.php"] = gen_import_log_modelo()
+    for path, contenido in gen_import_log_resource().items():
+        archivos[path] = contenido
+    print("  📋 import_logs (migration + modelo + resource)")
 
     # 4b. Tablas auxiliares para hojas tipo "matriz_asistencia"
     matriz_cfg = next(
