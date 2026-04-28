@@ -48,6 +48,82 @@ def _hojas_que_alimentan_agregado(cfg: dict) -> dict:
     return mapa
 
 
+def _construir_ai_canonizar(cfg: dict, wb, base: str, empresa: str) -> dict:
+    """Pre-pass: para cada hoja con columnas que tienen `ai_canonizar`,
+    extrae valores únicos del Excel y obtiene el mapeo IA.
+    Devuelve {(alias, campo): {valor_orig: canonico}}."""
+    try:
+        from ai_cleaner import ai_normalizar_columna
+    except Exception:
+        return {}
+    mapeos = {}
+    for alias, hoja_cfg in cfg.get("hojas", {}).items():
+        cols = hoja_cfg.get("columnas", {}) or {}
+        if not isinstance(cols, dict):
+            continue
+        nombre_hoja = hoja_cfg.get("nombre")
+        if nombre_hoja not in wb.sheetnames:
+            continue
+        ws = wb[nombre_hoja]
+        fila_ini = hoja_cfg.get("fila_datos", 5)
+        for campo, valor in cols.items():
+            # Soporte dos formatos:
+            #   "campo": "G"                          (legacy plano)
+            #   "campo": {"columna": "G", "ai_canonizar": [...]}
+            if not isinstance(valor, dict):
+                continue
+            cats = valor.get("ai_canonizar")
+            if not cats:
+                continue
+            letra = valor.get("columna")
+            if not letra:
+                continue
+            try:
+                col_idx = col_letra_a_num(letra)
+            except Exception:
+                continue
+            valores_unicos = []
+            seen = set()
+            fin = min(ws.max_row or fila_ini, fila_ini + 500)
+            for r in range(fila_ini, fin + 1):
+                v = ws.cell(r, col_idx).value
+                if v is None:
+                    continue
+                s = str(v).strip()
+                if not s or s in seen:
+                    continue
+                seen.add(s)
+                valores_unicos.append(s)
+            if not valores_unicos:
+                continue
+            cache_path = os.path.join(
+                base, "ai_cache", f"{empresa}_{alias}_{campo}.json"
+            )
+            mapeo = ai_normalizar_columna(
+                valores_unicos=valores_unicos,
+                categorias=cats,
+                cache_path=cache_path,
+                campo=f"{alias}.{campo}",
+            )
+            if mapeo:
+                mapeos[(alias, campo)] = mapeo
+    return mapeos
+
+
+def _aplanar_columnas(cols: dict) -> dict:
+    """Convierte el formato extendido {campo: {columna: 'G', ai_canonizar: [...]}}
+    al formato plano {campo: 'G'} que el resto del importer espera."""
+    aplanado = {}
+    for k, v in (cols or {}).items():
+        if isinstance(v, dict):
+            letra = v.get("columna")
+            if letra:
+                aplanado[k] = letra
+        else:
+            aplanado[k] = v
+    return aplanado
+
+
 def importar(empresa: str, laravel_dir: str):
     base = os.path.dirname(os.path.abspath(__file__))
     cfg_path = os.path.join(base, "empresas", f"{empresa}.json")
@@ -62,6 +138,11 @@ def importar(empresa: str, laravel_dir: str):
     if sinonimos:
         print(f"  🔁 sinónimos cargados: {len(sinonimos)} mapeos → "
               f"{set(sinonimos.values())}")
+
+    # Pre-pass IA: canonización de columnas con ai_canonizar
+    ai_mapeos = _construir_ai_canonizar(cfg, wb, base, empresa)
+    if ai_mapeos:
+        print(f"  🤖 ai_cleaner: {len(ai_mapeos)} columnas con mapeo activo")
 
     # Leer .env de Laravel para obtener credenciales DB
     env_path = os.path.join(laravel_dir, ".env")
@@ -184,7 +265,7 @@ def importar(empresa: str, laravel_dir: str):
             print(f"  ⚠️  Hoja '{nombre_hoja}' no encontrada")
             continue
 
-        columnas = hoja_cfg["columnas"]
+        columnas = _aplanar_columnas(hoja_cfg.get("columnas", {}))
         fila_ini = hoja_cfg.get("fila_datos", 5)
         if tipo == "kpis":
             continue
@@ -261,6 +342,18 @@ def importar(empresa: str, laravel_dir: str):
                     s = str(v).strip()
                     if s in sinonimos:
                         valores[campo_canonizar] = sinonimos[s]
+
+            # 6) Canonización IA: aplica mapeos {valor_orig → canonico}
+            # producidos por ai_cleaner (claude-haiku-3-5 + caché).
+            for (alias_m, campo_m), mapeo in ai_mapeos.items():
+                if alias_m != alias:
+                    continue
+                v = valores.get(campo_m)
+                if v is None:
+                    continue
+                s = str(v).strip()
+                if s in mapeo and mapeo[s] != s:
+                    valores[campo_m] = mapeo[s]
 
             # Convertir fechas Excel (datetime → string)
             import datetime as _dt

@@ -7,6 +7,9 @@ creds.json
 *_credentials.json
 service_account*.json
 
+# ── AI cache (claude-haiku-3-5 normalización de columnas) ───────────────────
+ai_cache/
+
 # ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
@@ -82,3 +85,4 @@ empresas/KraftDo_BD_Maestra_v5.xlsx
 .env
 empresas/*.xlsx
 empresas/*.xls
+xls/
