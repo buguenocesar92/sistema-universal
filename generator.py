@@ -1485,21 +1485,33 @@ class DatabaseSeeder extends Seeder
 
 
 
-def gen_filament_pages(alias: str, cfg_hoja: dict) -> dict:
-    """Genera las 3 Pages que necesita cada Filament Resource."""
+def gen_filament_pages(alias: str, cfg_hoja: dict, empresa: str = "") -> dict:
+    """Genera las 3 Pages que necesita cada Filament Resource.
+    En el ListXxx además del CreateAction y CSV expone:
+      - "Exportar Excel" (xlsx via PhpSpreadsheet, respeta orden cols del JSON,
+        excluye _row_hash/created_at/updated_at).
+      - "Sincronizar Excel" (sube .xlsx, dispara `php artisan kraftdo:sync`)."""
     modelo_n = nombre_modelo(alias)
     pages    = {}
     ns_r = "App\\Filament\\Resources\\"
     ns_f = "Filament\\"
-
     tabla_n = nombre_tabla(alias)
+
+    # Orden de columnas del JSON (lo que el usuario espera ver/exportar).
+    cols_json = list((cfg_hoja.get("columnas") or {}).keys())
+    cols_json_php = "[" + ", ".join("'" + c + "'" for c in cols_json) + "]"
+
     pages["app/Filament/Resources/" + modelo_n + "Resource/Pages/List" + modelo_n + "s.php"] = (
         "<?php\n\n"
         "namespace " + ns_r + modelo_n + "Resource\\Pages;\n\n"
         "use " + ns_r + modelo_n + "Resource;\n"
         "use " + ns_f + "Actions;\n"
+        "use " + ns_f + "Forms;\n"
         "use App\\Models\\" + modelo_n + ";\n"
-        "use " + ns_f + "Resources\\Pages\\ListRecords;\n\n"
+        "use " + ns_f + "Resources\\Pages\\ListRecords;\n"
+        "use " + ns_f + "Notifications\\Notification;\n"
+        "use Illuminate\\Support\\Facades\\Storage;\n"
+        "use Illuminate\\Support\\Facades\\Artisan;\n\n"
         "class List" + modelo_n + "s extends ListRecords\n"
         "{\n"
         "    protected static string $resource = " + modelo_n + "Resource::class;\n\n"
@@ -1507,10 +1519,11 @@ def gen_filament_pages(alias: str, cfg_hoja: dict) -> dict:
         "    {\n"
         "        return [\n"
         "            Actions\\CreateAction::make(),\n"
+        # ── CSV (legacy)
         "            Actions\\Action::make('export_csv')\n"
         "                ->label('Exportar CSV')\n"
         "                ->icon('heroicon-o-arrow-down-tray')\n"
-        "                ->color('success')\n"
+        "                ->color('gray')\n"
         "                ->action(function () {\n"
         "                    $registros = " + modelo_n + "::all();\n"
         "                    $filename = '" + tabla_n + "_' . now()->format('Y-m-d_His') . '.csv';\n"
@@ -1525,6 +1538,77 @@ def gen_filament_pages(alias: str, cfg_hoja: dict) -> dict:
         "                        }\n"
         "                        fclose($out);\n"
         "                    }, $filename, ['Content-Type' => 'text/csv; charset=UTF-8']);\n"
+        "                }),\n"
+        # ── XLSX (PhpSpreadsheet, vendored por pxlrbt/filament-excel)
+        "            Actions\\Action::make('export_xlsx')\n"
+        "                ->label('Exportar Excel')\n"
+        "                ->icon('heroicon-o-document-arrow-down')\n"
+        "                ->color('success')\n"
+        "                ->action(function () {\n"
+        "                    $cols = " + cols_json_php + ";\n"
+        "                    if (empty($cols)) {\n"
+        "                        $first = " + modelo_n + "::first();\n"
+        "                        $cols = $first ? array_keys($first->toArray()) : [];\n"
+        "                    }\n"
+        "                    $excluir = ['_row_hash','created_at','updated_at'];\n"
+        "                    $cols = array_values(array_diff($cols, $excluir));\n"
+        "                    $registros = " + modelo_n + "::all();\n"
+        "                    $filename = '" + tabla_n + "_' . now()->format('Y-m-d_His') . '.xlsx';\n"
+        "                    $tmp = tempnam(sys_get_temp_dir(), 'xlsx_') . '.xlsx';\n"
+        "                    $sheet = new \\PhpOffice\\PhpSpreadsheet\\Spreadsheet();\n"
+        "                    $ws = $sheet->getActiveSheet();\n"
+        "                    foreach ($cols as $i => $c) {\n"
+        "                        $ws->setCellValueByColumnAndRow($i + 1, 1, $c);\n"
+        "                    }\n"
+        "                    $row = 2;\n"
+        "                    foreach ($registros as $r) {\n"
+        "                        $arr = $r->toArray();\n"
+        "                        foreach ($cols as $i => $c) {\n"
+        "                            $v = $arr[$c] ?? null;\n"
+        "                            if (is_array($v)) $v = json_encode($v);\n"
+        "                            $ws->setCellValueByColumnAndRow($i + 1, $row, $v);\n"
+        "                        }\n"
+        "                        $row++;\n"
+        "                    }\n"
+        "                    (new \\PhpOffice\\PhpSpreadsheet\\Writer\\Xlsx($sheet))->save($tmp);\n"
+        "                    return response()->download($tmp, $filename)->deleteFileAfterSend();\n"
+        "                }),\n"
+        # ── Sync desde Excel
+        "            Actions\\Action::make('sync_excel')\n"
+        "                ->label('Sincronizar Excel')\n"
+        "                ->icon('heroicon-o-arrow-path')\n"
+        "                ->color('warning')\n"
+        "                ->schema([\n"
+        "                    Forms\\Components\\FileUpload::make('archivo')\n"
+        "                        ->label('Excel (.xlsx)')\n"
+        "                        ->acceptedFileTypes(['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel'])\n"
+        "                        ->required()\n"
+        "                        ->disk('local')\n"
+        "                        ->directory('sync_temp')\n"
+        "                        ->visibility('private'),\n"
+        "                ])\n"
+        "                ->action(function (array $data) {\n"
+        "                    $stored = $data['archivo'] ?? null;\n"
+        "                    if (!$stored) {\n"
+        "                        Notification::make()->title('Sin archivo')->danger()->send();\n"
+        "                        return;\n"
+        "                    }\n"
+        "                    $absStored = Storage::disk('local')->path($stored);\n"
+        "                    $finalDir  = Storage::disk('local')->path('sync_temp');\n"
+        "                    if (!is_dir($finalDir)) mkdir($finalDir, 0775, true);\n"
+        "                    $finalPath = $finalDir . DIRECTORY_SEPARATOR . '" + empresa + ".xlsx';\n"
+        "                    @copy($absStored, $finalPath);\n"
+        "                    $exit = Artisan::call('kraftdo:sync', ['empresa' => '" + empresa + "']);\n"
+        "                    $out  = trim(Artisan::output());\n"
+        "                    if ($exit === 0) {\n"
+        "                        Notification::make()->title('Sync OK')\n"
+        "                            ->body($out !== '' ? \\Illuminate\\Support\\Str::limit($out, 400) : 'Importación completada.')\n"
+        "                            ->success()->send();\n"
+        "                    } else {\n"
+        "                        Notification::make()->title('Sync con errores')\n"
+        "                            ->body(\\Illuminate\\Support\\Str::limit($out, 400))\n"
+        "                            ->danger()->send();\n"
+        "                    }\n"
         "                }),\n"
         "        ];\n"
         "    }\n"
@@ -2520,6 +2604,62 @@ def gen_recalcular_command(modelos_observers: list[str]) -> str:
     )
 
 
+def gen_sync_command(empresa: str) -> str:
+    """v25-fase4: php artisan kraftdo:sync {empresa} — invoca el importer
+    Python sobre el .xlsx que el panel acaba de subir a sync_temp/."""
+    base_repo = os.path.dirname(os.path.abspath(__file__))
+    importer  = os.path.join(base_repo, "importar_excel_a_mysql.py")
+    return (
+        "<?php\n\n"
+        "namespace App\\Console\\Commands;\n\n"
+        "use Illuminate\\Console\\Command;\n"
+        "use Illuminate\\Support\\Facades\\Storage;\n\n"
+        "class SyncDesdeExcel extends Command\n"
+        "{\n"
+        "    protected $signature = 'kraftdo:sync {empresa}';\n"
+        "    protected $description = 'Sincroniza datos desde un Excel subido al panel via importar_excel_a_mysql.py';\n\n"
+        "    public function handle(): int\n"
+        "    {\n"
+        "        $empresa = (string) $this->argument('empresa');\n"
+        f"        $repoBase    = '{base_repo}';\n"
+        f"        $importerPy  = '{importer}';\n"
+        "        $cfgPath     = $repoBase . DIRECTORY_SEPARATOR . 'empresas' . DIRECTORY_SEPARATOR . $empresa . '.json';\n"
+        "        if (!is_file($cfgPath)) {\n"
+        "            $this->error('No existe ' . $cfgPath);\n"
+        "            return self::FAILURE;\n"
+        "        }\n"
+        "        $cfg = json_decode(file_get_contents($cfgPath), true);\n"
+        "        $excelDest = $repoBase . DIRECTORY_SEPARATOR . ($cfg['fuente']['archivo'] ?? '');\n"
+        "        $excelTmp  = Storage::disk('local')->path('sync_temp/' . $empresa . '.xlsx');\n"
+        "        if (!is_file($excelTmp)) {\n"
+        "            $this->error('No se encontro ' . $excelTmp . ' (subir primero desde el panel)');\n"
+        "            return self::FAILURE;\n"
+        "        }\n"
+        "        if (!@copy($excelTmp, $excelDest)) {\n"
+        "            $this->error('No se pudo copiar el Excel a ' . $excelDest);\n"
+        "            return self::FAILURE;\n"
+        "        }\n"
+        "        $cmd = 'python3 ' . escapeshellarg($importerPy) . ' '\n"
+        "             . escapeshellarg($empresa) . ' ' . escapeshellarg(base_path()) . ' 2>&1';\n"
+        "        $out = shell_exec($cmd);\n"
+        "        $this->line($out ?? '(sin salida)');\n"
+        "        // Resumen del último import_log\n"
+        "        $logs = \\App\\Models\\ImportLog::where('empresa', $empresa)\n"
+        "            ->orderByDesc('id')->take(10)->get();\n"
+        "        if ($logs->count()) {\n"
+        "            $this->line('--- Últimos imports ---');\n"
+        "            foreach ($logs as $l) {\n"
+        "                $this->line(sprintf('%s: %d nuevos, %d upd, %d igual, %d err (%dms)',\n"
+        "                    $l->alias_hoja, $l->nuevos, $l->actualizados,\n"
+        "                    $l->sin_cambio, $l->errores, $l->duracion_ms));\n"
+        "            }\n"
+        "        }\n"
+        "        return self::SUCCESS;\n"
+        "    }\n"
+        "}\n"
+    )
+
+
 def gen_install_script(empresa: str, hojas: dict) -> str:
     modelos = [nombre_modelo(a) for a, h in hojas.items()
                if h.get("tipo") in ("catalogo", "registros")]
@@ -2874,7 +3014,7 @@ def generar(empresa: str = None, output_dir: str = "./laravel_output", preview: 
     # 3d. Filament Pages
     if not solo or solo in ("filament", "pages"):
         for alias, cfg_hoja in hojas_generables.items():
-            pages = gen_filament_pages(alias, cfg_hoja)
+            pages = gen_filament_pages(alias, cfg_hoja, empresa)
             for path, contenido in pages.items():
                 archivos[path] = contenido
                 print(f"  📄 {path}")
@@ -2916,6 +3056,10 @@ def generar(empresa: str = None, output_dir: str = "./laravel_output", preview: 
     for path, contenido in gen_import_log_resource().items():
         archivos[path] = contenido
     print("  📋 import_logs (migration + modelo + resource)")
+
+    # 4a-ter. Comando artisan kraftdo:sync (v25-fase4)
+    archivos["app/Console/Commands/SyncDesdeExcel.php"] = gen_sync_command(empresa)
+    print("  🔄 app/Console/Commands/SyncDesdeExcel.php (kraftdo:sync)")
 
     # 4b. Tablas auxiliares para hojas tipo "matriz_asistencia"
     matriz_cfg = next(

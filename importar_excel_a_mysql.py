@@ -3,7 +3,7 @@
 Importa datos del Excel al MySQL que usa el panel Filament.
 Uso: python3 importar_excel_a_mysql.py kraftdo_bd /tmp/kraftdo_laravel_real
 """
-import sys, json, os
+import sys, json, os, re
 import openpyxl
 import mysql.connector
 from pathlib import Path
@@ -138,6 +138,60 @@ def importar(empresa: str, laravel_dir: str):
     if sinonimos:
         print(f"  🔁 sinónimos cargados: {len(sinonimos)} mapeos → "
               f"{set(sinonimos.values())}")
+
+    # ── v25-fase4: Detección de schema drift Excel ↔ JSON ─────────────
+    # Compara los headers reales del Excel con las columnas del JSON.
+    # No interrumpe; solo advierte para que el usuario actualice el JSON.
+    for alias_d, hoja_d in cfg.get("hojas", {}).items():
+        if hoja_d.get("tipo") not in ("catalogo", "registros", "agregado"):
+            continue
+        nombre_hoja_d = hoja_d.get("nombre")
+        if nombre_hoja_d not in wb.sheetnames:
+            continue
+        ws_d = wb[nombre_hoja_d]
+        fila_h = max(1, hoja_d.get("fila_datos", 5) - 1)
+        cols_json = _aplanar_columnas(hoja_d.get("columnas", {}) or {})
+        letras_json = {v.upper() for v in cols_json.values()}
+        # Headers Excel
+        from openpyxl.utils import get_column_letter
+        nuevas = []
+        for c in range(1, (ws_d.max_column or 0) + 1):
+            h = ws_d.cell(fila_h, c).value
+            if h is None or str(h).strip() == "":
+                continue
+            letra = get_column_letter(c)
+            if letra not in letras_json:
+                # ¿Tiene datos abajo?
+                tiene = False
+                fin = min(ws_d.max_row or fila_h + 1, fila_h + 30)
+                for r in range(fila_h + 1, fin + 1):
+                    if ws_d.cell(r, c).value is not None:
+                        tiene = True
+                        break
+                if tiene:
+                    hdr = re.sub(r'\s+', ' ', str(h)).strip()[:40]
+                    nuevas.append((letra, hdr))
+        if nuevas:
+            print(f"  ⚠️  Schema drift en {alias_d}:")
+            print(f"     Columnas en Excel NO mapeadas en JSON:")
+            for letra, hdr in nuevas[:10]:
+                print(f"        col {letra}: {hdr!r}")
+            print(f"     → Agrégalas al JSON y regenera para capturarlas.")
+        # Columnas en JSON sin existir en Excel (letras fuera del rango)
+        max_col_excel = ws_d.max_column or 0
+        from openpyxl.utils import column_index_from_string
+        faltantes = []
+        for campo_j, letra_j in cols_json.items():
+            try:
+                idx = column_index_from_string(letra_j)
+            except Exception:
+                continue
+            if idx > max_col_excel:
+                faltantes.append((campo_j, letra_j))
+        if faltantes:
+            print(f"  ⚠️  Columnas del JSON {alias_d} fuera del rango del Excel:")
+            for c, l in faltantes[:5]:
+                print(f"        {c} (col {l})")
 
     # Pre-pass IA: canonización de columnas con ai_canonizar
     ai_mapeos = _construir_ai_canonizar(cfg, wb, base, empresa)
