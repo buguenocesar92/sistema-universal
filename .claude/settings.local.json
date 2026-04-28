@@ -5,7 +5,8 @@
       "Read(//tmp/kraftdo_bd_test/app/Filament/**)",
       "Bash(python3 *)",
       "Bash(php artisan tinker '--execute= *)",
-      "Bash(php artisan *)"
+      "Bash(php artisan *)",
+      "Bash(pkill -f \"artisan serve\")"
     ]
   },
   "enableAllProjectMcpServers": true,
