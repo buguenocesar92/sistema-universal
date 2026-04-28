@@ -23,12 +23,21 @@ import tempfile
 from pathlib import Path
 from datetime import datetime
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from typing import Any, Optional
 import openpyxl
+
+# FastAPI/Pydantic son opcionales: classifier funciona como librería
+# (analizar_excel + generar_json) incluso sin la UI web instalada.
+try:
+    from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+    from fastapi.responses import HTMLResponse, JSONResponse
+    from fastapi.middleware.cors import CORSMiddleware
+    from pydantic import BaseModel
+    _HAS_WEB = True
+except ImportError:
+    _HAS_WEB = False
+    class BaseModel:  # type: ignore
+        pass
 
 # Modelos para consolidación y Fase 0
 class DescripcionNegocio(BaseModel):
@@ -41,8 +50,24 @@ class GrupoConsolidacion(BaseModel):
     aliases: list[str]
     empresa_cfg: dict = {}
 
-app = FastAPI(title="KraftDo Classifier", docs_url=None)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+if _HAS_WEB:
+    app = FastAPI(title="KraftDo Classifier", docs_url=None)
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+else:
+    # Stub: permite cargar el archivo en modo librería (sin uvicorn/fastapi)
+    # para usar analizar_excel / generar_json sin instalar la web stack.
+    class _AppStub:
+        def _noop(self, *_a, **_kw):
+            def deco(fn): return fn
+            return deco
+        get = post = put = delete = _noop  # type: ignore
+        def add_middleware(self, *_a, **_kw): pass
+    app = _AppStub()
+    HTMLResponse = JSONResponse = lambda *a, **kw: None  # type: ignore
+    File = lambda *a, **kw: None  # type: ignore
+    UploadFile = type("UploadFile", (), {})  # type: ignore
+    HTTPException = Exception  # type: ignore
+    Request = type("Request", (), {})  # type: ignore
 
 class GenerarRequest(BaseModel):
     empresa: dict
@@ -81,6 +106,418 @@ def detectar_tipo_col(nombre: str) -> str:
     if any(p in n for p in ("telefono", "whatsapp", "phone")):
         return "phone"
     return "string"
+
+# ────────────────────────────────────────────────────────────────────────
+# Detección de capas avanzadas (v25-fase1)
+# Cada función infiere una capa específica del JSON sin depender de las otras.
+# ────────────────────────────────────────────────────────────────────────
+
+# Vista lateral: campos que describen al padre, sin valor histórico para el hijo.
+ACCESSOR_HINTS = {
+    "whatsapp", "telefono", "fono", "email", "correo", "ciudad",
+    "direccion", "region", "comuna", "rut",
+}
+# Snapshot: campos cuyo valor en el momento de creación importa históricamente.
+SNAPSHOT_HINTS = {
+    "precio", "precio_unit", "precio_unitario", "precio_mayor",
+    "categoria", "nombre", "tiempo_produccion", "plazo",
+    "costo_unit", "costo",
+}
+# Hojas que típicamente sirven como "agregado" cuando contienen sumas
+# de otras y un campo "disponible/stock/saldo".
+AGREGADO_HINTS_DISPONIBLE = {"disponible", "stock", "stock_disponible", "saldo"}
+# Reglas de cálculo conocidas — espejo de generator.REGLAS_CALCULO.
+# Solo necesitamos los nombres + descripciones para proponer en el JSON.
+REGLAS_CALCULO_CONOCIDAS = {
+    "costo_total":      ["costo_insumo", "hora_trabajo"],
+    "precio_unit":      ["costo_total"],
+    "precio_mayor":     ["costo_total"],
+    "valor_dia":        ["sueldo_base", "dias_laborales"],
+    "descuento_faltas": ["valor_dia", "faltas"],
+    "a_pagar":          ["sueldo_base", "descuento_faltas"],
+    "saldo":            ["a_pagar", "quincena_pagada"],
+    "iva":              ["neto"],
+    "iva_servicio":     ["total_neto"],
+    "total":            ["neto"],
+    "total_neto":       ["costo_china", "embarcadero", "agente_aduana"],
+    "stock_disponible": ["importacion", "ventas"],
+    "total_gastado":    ["materiales", "mano_obra"],
+    "resultado":        ["cobrado", "total_gastado"],
+    "margen":           ["cobrado", "resultado"],
+    "neto_dsto":        ["neto"],
+}
+
+
+def _levenshtein(a: str, b: str) -> int:
+    """Distancia Levenshtein iterativa (sin deps externas)."""
+    if a == b:
+        return 0
+    if len(a) < len(b):
+        a, b = b, a
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            cur[j] = min(cur[j-1] + 1, prev[j] + 1, prev[j-1] + cost)
+        prev = cur
+    return prev[-1]
+
+
+def _valores_unicos_columna(ws, col_letter: str, fila_datos: int,
+                             max_filas: int = 200) -> list:
+    """Devuelve hasta max_filas valores únicos no-vacíos de una columna."""
+    try:
+        from openpyxl.utils import column_index_from_string
+        col_idx = column_index_from_string(col_letter)
+    except Exception:
+        return []
+    vistos = []
+    seen = set()
+    fin = min(ws.max_row or fila_datos, fila_datos + max_filas)
+    for r in range(fila_datos, fin + 1):
+        v = ws.cell(r, col_idx).value
+        if v is None:
+            continue
+        s = str(v).strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        vistos.append(s)
+    return vistos
+
+
+def detectar_formato_id(columnas: dict, ws, fila_datos: int,
+                         alias_hoja: str = "") -> dict | None:
+    """1a) Detecta columna con valores tipo PREFIJO-NNN. Solo propone
+    formato_id si encuentra el patrón en datos REALES o si el campo es
+    claramente un identificador autonumérico (n_, n_pedido, folio, num_)
+    Y la hoja parece transaccional (no catálogo).
+    Devuelve {campo, formato_id} o None."""
+    HINTS_AUTO = ("n_pedido", "n_factura", "folio", "n_orden", "n_orden_de_compra")
+    patron = re.compile(r'^([A-Z]{2,6})-(\d{2,4})$')
+    for campo, letra in columnas.items():
+        # Normalizar dobles underscores que vienen de slugify de "Nº PEDIDO"
+        campo_norm = re.sub(r'_+', '_', campo).strip("_")
+        valores = _valores_unicos_columna(ws, letra, fila_datos, 60)
+        prefijos = []
+        for v in valores:
+            m = patron.match(str(v).strip())
+            if m:
+                prefijos.append((m.group(1), len(m.group(2))))
+        if prefijos:
+            from collections import Counter
+            p_more = Counter(p for p, _ in prefijos).most_common(1)[0][0]
+            ancho  = Counter(w for _, w in prefijos).most_common(1)[0][0]
+            return {"campo": campo, "formato_id": f"{p_more}-{{:0{ancho}d}}"}
+        # Sin valores pero el nombre es claramente un id auto
+        if not valores and any(h == campo_norm or h in campo_norm for h in HINTS_AUTO):
+            base = re.sub(r'[^a-zA-Z]', '', alias_hoja)[:3].upper() or "ID"
+            return {"campo": campo, "formato_id": f"{base}-{{:03d}}"}
+    return None
+
+
+def detectar_fk_y_padres(alias_hoja: str, columnas: dict,
+                          todas_hojas: dict) -> list:
+    """1b) Lista de FKs detectadas: cada item con info del padre.
+    Hace match flexible: campo='cliente' encuentra alias 'clientes'
+    o 'control_clientes', etc."""
+    rels = []
+    for campo in columnas:
+        if campo == "id":
+            continue
+        for alias_b, meta_b in todas_hojas.items():
+            if alias_b == alias_hoja or meta_b.get("vacia"):
+                continue
+            ident_b = meta_b.get("identificador")
+            cols_b  = meta_b.get("columnas", {}) or {}
+            sing_b  = alias_b.rstrip("s")
+            es_fk = (
+                (ident_b and campo == ident_b)
+                or campo == alias_b
+                or campo == sing_b
+                or alias_b.endswith("_" + campo)            # control_clientes ← cliente
+                or alias_b.endswith("_" + campo + "s")      # control_pedidos ← pedido
+                or sing_b.endswith("_" + campo)
+            )
+            if es_fk:
+                rels.append({
+                    "campo_origen":  campo,
+                    "alias_padre":   alias_b,
+                    "ident_padre":   ident_b,
+                    "cols_padre":    set(cols_b.keys()),
+                })
+                break
+    return rels
+
+
+def proponer_accessor_y_snapshot(columnas: dict, fks: list) -> tuple[dict, list, set]:
+    """1b) A partir de las FKs, decide qué columnas mover a campos_accessor
+    o snapshot_at_create. Devuelve (columnas_finales, snapshot_lista,
+    accessors_set)."""
+    accessors = []
+    snapshots = []
+    a_quitar  = set()
+    nombres_cols = list(columnas.keys())
+
+    for fk in fks:
+        cols_padre = fk["cols_padre"]
+        for campo in nombres_cols:
+            if campo == fk["campo_origen"]:
+                continue
+            # ¿Existe columna con ese nombre en el padre?
+            if campo not in cols_padre:
+                continue
+            if campo in ACCESSOR_HINTS and campo not in accessors:
+                accessors.append(campo)
+                a_quitar.add(campo)
+            elif campo in SNAPSHOT_HINTS and campo not in snapshots:
+                snapshots.append(campo)
+                a_quitar.add(campo)
+
+    cols_finales = {k: v for k, v in columnas.items() if k not in a_quitar}
+    return cols_finales, snapshots, set(accessors)
+
+
+def detectar_agregado(alias: str, columnas: dict, todas_hojas: dict) -> dict | None:
+    """1c) Si la hoja tiene cols cuyo nombre coincide con (substring de)
+    otros alias y un campo 'disponible/stock/saldo/total' → tipo agregado
+    con fuentes."""
+    nombres_cols = set(columnas.keys())
+    if not (nombres_cols & AGREGADO_HINTS_DISPONIBLE) and "total" not in nombres_cols:
+        return None
+
+    def _stem(s: str) -> str:
+        """Reduce un slug a su 'núcleo': sin underscores múltiples ni vocales
+        sueltas finales ('importaci_n' → 'importacion')."""
+        s = re.sub(r'_+', '_', s).strip("_")
+        # Casos comunes: importaci_n → importacion, etc.
+        s = s.replace("ci_n", "cion").replace("si_n", "sion")
+        return s
+
+    def _buscar_alias_para(campo: str) -> str | None:
+        """Match flexible: 'ventas' encuentra 'control_de_ventas',
+        'importaci_n' encuentra 'control_importacion', etc."""
+        c = _stem(campo)
+        if c in todas_hojas: return c
+        if c + "s" in todas_hojas: return c + "s"
+        sing = c.rstrip("s")
+        for alias_b in todas_hojas:
+            if alias_b == alias:
+                continue
+            ab_stem = _stem(alias_b)
+            if c in ab_stem or sing in ab_stem or ab_stem.endswith("_" + c):
+                return alias_b
+        return None
+
+    def _es_disponible(c: str) -> bool:
+        c = _stem(c)
+        return c in AGREGADO_HINTS_DISPONIBLE or c == "total" or "disponible" in c
+
+    fuentes = []
+    for campo in nombres_cols:
+        if _es_disponible(campo) or campo == "total":
+            continue
+        alias_real = _buscar_alias_para(campo)
+        if not alias_real:
+            continue
+        candidato = todas_hojas.get(alias_real, {})
+        if candidato.get("vacia"):
+            continue
+        cols_fuente = candidato.get("columnas", {}) or {}
+        cols_stems  = {_stem(k): k for k in cols_fuente}
+        campo_grupo = next((cols_stems[s] for s in ("modelo", "codigo", "sku") if s in cols_stems), None)
+        campo_valor = next(
+            (cols_stems[s] for s in ("cantidad", "cant", "unidades", "unidad", "qty", "monto", "total")
+             if s in cols_stems),
+            None
+        )
+        if not (campo_grupo and campo_valor):
+            continue
+        fuentes.append({
+            "hoja":         alias_real,
+            "campo_grupo":  campo_grupo,
+            "campo_valor":  campo_valor,
+            "destino":      campo,
+        })
+    if not fuentes:
+        return None
+
+    grupo = next((c for c in ("modelo", "codigo", "sku") if c in nombres_cols), "modelo")
+    return {"agrupar_por": grupo, "fuentes": fuentes}
+
+
+def detectar_sinonimos_modelo(hojas_meta: dict, wb) -> dict:
+    """1d) Compara valores únicos de columnas modelo/codigo/sku entre
+    hojas y agrupa similares. Devuelve {canonico: [variantes]}."""
+    valores_por_hoja = {}
+    for alias, meta in hojas_meta.items():
+        if meta.get("vacia"):
+            continue
+        cols = meta.get("columnas", {}) or {}
+        nombre_hoja = meta.get("nombre")
+        ws = wb[nombre_hoja] if nombre_hoja in wb.sheetnames else None
+        if not ws:
+            continue
+        for campo in ("modelo", "codigo", "sku"):
+            if campo not in cols:
+                continue
+            valores = _valores_unicos_columna(
+                ws, cols[campo], meta.get("fila_datos", 5), 200
+            )
+            valores_por_hoja[(alias, campo)] = valores
+            break
+
+    todos = []
+    for vals in valores_por_hoja.values():
+        for v in vals:
+            if v not in todos:
+                todos.append(v)
+    if len(todos) < 2:
+        return {}
+
+    def _son_sinonimos(a: str, b: str) -> bool:
+        """Criterio estricto: misma cadena difiriendo solo en case, o uno
+        contiene al otro como substring distinto, o levenshtein <= 1 sobre
+        cadenas de >= 4 chars (evita false positives entre A01/A02)."""
+        al, bl = a.lower(), b.lower()
+        if al == bl and a != b:                 # solo case
+            return True
+        if al != bl and (al in bl or bl in al): # substring
+            return True
+        if min(len(al), len(bl)) >= 4 and _levenshtein(al, bl) == 1:
+            return True
+        return False
+
+    grupos = []
+    for v in todos:
+        encontrado = False
+        for g in grupos:
+            if any(_son_sinonimos(v, w) for w in g["variantes"]):
+                g["variantes"].add(v)
+                if len(v) < len(g["canonico"]):
+                    g["canonico"] = v
+                encontrado = True
+                break
+        if not encontrado:
+            grupos.append({"canonico": v, "variantes": {v}})
+
+    sinonimos = {}
+    for g in grupos:
+        if len(g["variantes"]) >= 2:
+            sinonimos[g["canonico"]] = sorted(g["variantes"])
+    return sinonimos
+
+
+def detectar_matriz_asistencia(meta: dict, ws) -> dict | None:
+    """1e) Hoja con >= 15 cols cuyo header es número 1..31 o letra A/F/L
+    → tipo matriz_asistencia. col_trabajador se infiere como la primera
+    columna a la izquierda de las cols-día que tenga texto en r4 o r5
+    (segunda fila de header en formato 'multi_header')."""
+    from openpyxl.utils import get_column_letter, column_index_from_string
+
+    fila_h = meta.get("fila_headers", 1)
+    cols_dia = []
+    max_col = ws.max_column or 0
+    for c in range(1, max_col + 1):
+        v = ws.cell(fila_h, c).value
+        if v is None:
+            continue
+        s = str(v).strip()
+        try:
+            n = int(float(s))
+            if 1 <= n <= 31:
+                cols_dia.append(get_column_letter(c))
+                continue
+        except (ValueError, TypeError):
+            pass
+    if len(cols_dia) < 15:
+        return None
+
+    # col_trabajador = la primera col a la izquierda de cols_dia con texto
+    # en alguna de las primeras 5 filas (catch headers multi-fila o nombres).
+    primer_dia_idx = column_index_from_string(cols_dia[0])
+    col_trabajador = None
+    cols_persona_hints = ("personal", "trabajador", "persona", "empleado", "nombre")
+    for c in range(primer_dia_idx - 1, 0, -1):
+        for r in range(1, min(6, ws.max_row + 1) if ws.max_row else 6):
+            v = ws.cell(r, c).value
+            if v is None:
+                continue
+            s = str(v).strip().lower()
+            if any(h in s for h in cols_persona_hints):
+                col_trabajador = get_column_letter(c)
+                break
+        if col_trabajador:
+            break
+    if not col_trabajador:
+        # Fallback: simplemente la columna inmediatamente a la izquierda.
+        col_trabajador = get_column_letter(max(primer_dia_idx - 1, 1))
+
+    n = len(cols_dia)
+    mitad = (n + 1) // 2
+    return {
+        "fila_inicio":          meta.get("fila_datos", 5),
+        "fila_fin":             ws.max_row or meta.get("fila_datos", 5),
+        "col_codigo_obra":      None,
+        "col_obra":             None,
+        "col_trabajador":       col_trabajador,
+        "cols_quincena1":       cols_dia[:mitad],
+        "cols_quincena2":       cols_dia[mitad:],
+        "col_pago_quincena":    None,
+        "col_pago_liquidacion": None,
+        "mes_actual":           "",
+    }
+
+
+def detectar_reglas_desde_formulas(ws, columnas: dict,
+                                    fila_datos: int) -> list:
+    """1f) Recorre formulas Excel y propone reglas calc conocidas."""
+    try:
+        from formula_parser import formula_a_php
+    except Exception:
+        formula_a_php = None
+
+    # Mapa letra → campo
+    letra_a_campo = {v: k for k, v in columnas.items()}
+    encontradas = set()
+    propuestas = []
+
+    fin = min(ws.max_row or fila_datos, fila_datos + 50)
+    from openpyxl.utils import get_column_letter
+    for r in range(fila_datos, fin + 1):
+        for letra_col, campo in letra_a_campo.items():
+            try:
+                from openpyxl.utils import column_index_from_string
+                c = column_index_from_string(letra_col)
+            except Exception:
+                continue
+            v = ws.cell(r, c).value
+            if not isinstance(v, str) or not v.startswith("="):
+                continue
+            if campo in encontradas:
+                continue
+            # ¿Es una regla conocida cuyas deps están todas en columnas?
+            if campo in REGLAS_CALCULO_CONOCIDAS:
+                deps = REGLAS_CALCULO_CONOCIDAS[campo]
+                if all(d in columnas for d in deps):
+                    propuestas.append({
+                        "campo":         campo,
+                        "deps":          deps,
+                        "formula_excel": v[:120],
+                        "implementado":  True,
+                    })
+                    encontradas.add(campo)
+            else:
+                propuestas.append({
+                    "campo":         campo,
+                    "deps":          [],
+                    "formula_excel": v[:120],
+                    "implementado":  False,
+                })
+                encontradas.add(campo)
+    return propuestas
+
 
 def analizar_excel(path: str) -> dict:
     """Analiza el Excel y retorna metadata de cada hoja."""
@@ -123,10 +560,14 @@ def analizar_excel(path: str) -> dict:
         # Preview: primeras 3 filas de datos
         fila_datos = fila_headers + 1
         preview = []
+        from openpyxl.utils import column_index_from_string
         for r in range(fila_datos, min(fila_datos + 3, max_row + 1)):
             fila = {}
             for letra, nombre in headers.items():
-                col_idx = ord(letra) - ord('A') + 1
+                try:
+                    col_idx = column_index_from_string(letra)
+                except Exception:
+                    continue
                 v = ws.cell(r, col_idx).value
                 fila[nombre] = str(v)[:30] if v is not None else ""
             if any(fila.values()):
@@ -161,16 +602,36 @@ def analizar_excel(path: str) -> dict:
             "catalogo"
         )
 
-        hojas[sheet_name] = {
+        # Slug fuerte: normaliza unicode (á→a, ñ→n), quita anotaciones tipo
+        # [AUTO]/(UND)/$, colapsa underscores múltiples y arregla casos
+        # comunes (categor_a → categoria) para que las heurísticas de
+        # detección funcionen sin tropezar con ruido tipográfico.
+        import unicodedata
+        def _slug_fuerte(s: str) -> str:
+            s = unicodedata.normalize("NFKD", str(s))
+            s = s.encode("ascii", "ignore").decode("ascii")
+            s = re.sub(r'\(.*?\)|\[.*?\]', '', s)  # parentéticos
+            s = s.lower().replace(" ", "_").replace("/", "_").replace("$", "")
+            s = re.sub(r'[^a-z0-9_]', '_', s)
+            s = re.sub(r'_+', '_', s).strip("_")
+            return s or "col"
+        cols_slug = {_slug_fuerte(k): letra for letra, k in headers.items()}
+
+        # Identificador candidato (heurística)
+        ident = None
+        for cand in ("n_pedido", "numero", "sku", "codigo", "id", "nombre", "trabajador", "evento", "modelo"):
+            if cand in cols_slug:
+                ident = cand
+                break
+
+        meta_hoja = {
             "nombre":           sheet_name,
             "vacia":            False,
             "filas":            n_filas_datos,
             "columnas_raw":     headers,
             "plantilla":        plantilla or "heuristica",
-            "columnas":         {
-                re.sub(r'[^a-z0-9_]', '_', k.lower().replace(" ", "_").replace("/", "_")): letra
-                for letra, k in headers.items()
-            },
+            "columnas":         cols_slug,
+            "identificador":    ident,
             "preview":          preview,
             "fila_headers":     fila_headers,
             "fila_datos":       fila_datos,
@@ -181,12 +642,60 @@ def analizar_excel(path: str) -> dict:
             }
         }
 
+        # Capas avanzadas que dependen solo de la hoja en sí
+        meta_hoja["formato_id_propuesto"]    = detectar_formato_id(cols_slug, ws, fila_datos, sheet_name)
+        meta_hoja["formulas_detectadas"]     = detectar_reglas_desde_formulas(ws, cols_slug, fila_datos)
+        matriz = detectar_matriz_asistencia(meta_hoja, ws)
+        if matriz:
+            meta_hoja["matriz_asistencia"] = matriz
+            meta_hoja["clasificacion"] = "matriz_asistencia"
+
+        hojas[sheet_name] = meta_hoja
+
+    # Capas que requieren mirar todas las hojas a la vez:
+    # detectar_fk_y_padres / accessor / snapshot / agregado.
+    # Indexamos por slug fuerte (sin emojis, unicode normalizado, single _).
+    import unicodedata as _ud
+    def _alias_slug(s: str) -> str:
+        s = _ud.normalize("NFKD", str(s))
+        s = s.encode("ascii", "ignore").decode("ascii")
+        s = re.sub(r'\(.*?\)|\[.*?\]', '', s)
+        s = s.lower().replace(" ", "_")
+        s = re.sub(r'[^a-z0-9_]', '_', s)
+        s = re.sub(r'_+', '_', s).strip("_")
+        return s or "hoja"
+    indexado = {}
+    for sn, m in hojas.items():
+        indexado[_alias_slug(sn)] = m
+
+    for sn, meta in hojas.items():
+        if meta.get("vacia"):
+            continue
+        cols   = meta.get("columnas", {}) or {}
+        alias  = _alias_slug(sn)
+        fks    = detectar_fk_y_padres(alias, cols, indexado)
+        meta["fks_detectadas"] = fks
+
+        cols_finales, snapshots, accessors = proponer_accessor_y_snapshot(cols, fks)
+        if accessors or snapshots:
+            meta["columnas_post_accessor"] = cols_finales
+            meta["accessors_propuestos"]   = sorted(accessors)
+            meta["snapshots_propuestos"]   = snapshots
+
+        agregado = detectar_agregado(alias, cols, indexado)
+        if agregado:
+            meta["agregado_propuesto"] = agregado
+            meta["clasificacion"] = "agregado"
+
+    # Sinónimos a nivel global del Excel
+    hojas["__sinonimos_modelo__"] = detectar_sinonimos_modelo(hojas, wb)
     return hojas
 
 
 def generar_json(empresa_data: dict, hojas_clasificadas: dict, hojas_meta: dict) -> dict:
-    """Genera el JSON de configuración final."""
+    """Genera el JSON de configuración final con capas avanzadas (v25-fase1)."""
     hojas_json = {}
+    sinonimos_globales = hojas_meta.get("__sinonimos_modelo__", {}) or {}
 
     for alias, clasificacion in hojas_clasificadas.items():
         if clasificacion in ("ignorar", "vista"):
@@ -196,20 +705,81 @@ def generar_json(empresa_data: dict, hojas_clasificadas: dict, hojas_meta: dict)
         if meta.get("vacia"):
             continue
 
+        # Si el classifier detectó accessors/snapshots, las cols_finales
+        # ya excluyen esos campos. Si no, usamos las columnas crudas.
+        columnas = meta.get("columnas_post_accessor") or meta.get("columnas", {})
+
+        # Si la hoja es matriz_asistencia, su contrato de JSON es distinto.
+        if clasificacion == "matriz_asistencia" or meta.get("matriz_asistencia"):
+            mat = meta.get("matriz_asistencia") or {}
+            cfg_hoja = {
+                "nombre":               meta.get("nombre", alias),
+                "tipo":                 "matriz_asistencia",
+                "fila_inicio":          mat.get("fila_inicio", meta.get("fila_datos", 5)),
+                "fila_fin":             mat.get("fila_fin",    meta.get("fila_datos", 5) + 14),
+                "col_codigo_obra":      mat.get("col_codigo_obra"),
+                "col_obra":             mat.get("col_obra"),
+                "col_trabajador":       mat.get("col_trabajador"),
+                "cols_quincena1":       mat.get("cols_quincena1", []),
+                "cols_quincena2":       mat.get("cols_quincena2", []),
+                "col_pago_quincena":    mat.get("col_pago_quincena"),
+                "col_pago_liquidacion": mat.get("col_pago_liquidacion"),
+                "mes_actual":           mat.get("mes_actual", ""),
+            }
+            alias_limpio = re.sub(r'[^a-z0-9_]', '_', alias.lower().replace(" ", "_"))
+            hojas_json[alias_limpio] = cfg_hoja
+            continue
+
         cfg_hoja = {
-            "nombre":      alias,
+            "nombre":      meta.get("nombre", alias),
             "tipo":        clasificacion,
             "descripcion": f"Hoja {alias}",
             "fila_datos":  meta.get("fila_datos", 5),
-            "columnas":    meta.get("columnas", {}),
+            "columnas":    columnas,
         }
 
-        # Agregar identificador automático
-        cols = list(meta.get("columnas", {}).keys())
-        for candidato in ("n__pedido", "numero", "n_pedido", "nombre", "sku", "codigo", "proveedor"):
-            if candidato in cols:
-                cfg_hoja["identificador"] = candidato
-                break
+        # Identificador automático (heurística amplia).
+        # Prioridad: si hay formato_id_propuesto, ese campo es el ident.
+        cols = list(columnas.keys())
+        fid  = meta.get("formato_id_propuesto")
+
+        ident = None
+        if fid and fid["campo"] in cols:
+            ident = fid["campo"]
+        elif meta.get("identificador") in cols:
+            ident = meta["identificador"]
+        else:
+            for candidato in ("n_pedido", "n__pedido", "numero", "nombre",
+                              "sku", "codigo", "trabajador", "evento",
+                              "modelo", "item", "proveedor"):
+                if candidato in cols:
+                    ident = candidato
+                    break
+        if ident:
+            cfg_hoja["identificador"] = ident
+
+        # 1a) formato_id si el ident coincide con el campo detectado
+        if fid and fid["campo"] == ident:
+            cfg_hoja["formato_id"] = fid["formato_id"]
+
+        # 1b) campos_accessor / snapshot_at_create
+        accessors = meta.get("accessors_propuestos") or []
+        snapshots = meta.get("snapshots_propuestos") or []
+        if accessors:
+            cfg_hoja["campos_accessor"] = list(accessors)
+        if snapshots:
+            cfg_hoja["snapshot_at_create"] = list(snapshots)
+
+        # 1c) agregado con fuentes
+        agg = meta.get("agregado_propuesto")
+        if agg and clasificacion == "agregado":
+            cfg_hoja["agrupar_por"] = agg["agrupar_por"]
+            cfg_hoja["fuentes"]     = agg["fuentes"]
+
+        # 1f) reglas_detectadas — fórmulas Excel mapeadas a REGLAS_CALCULO
+        formulas = meta.get("formulas_detectadas") or []
+        if formulas:
+            cfg_hoja["reglas_detectadas"] = formulas
 
         # Filtro activo para catálogos con campo estado
         if clasificacion == "catalogo" and "estado" in cols:
@@ -241,7 +811,7 @@ def generar_json(empresa_data: dict, hojas_clasificadas: dict, hojas_meta: dict)
         alias_limpio = re.sub(r'[^a-z0-9_]', '_', alias.lower().replace(" ", "_"))
         hojas_json[alias_limpio] = cfg_hoja
 
-    return {
+    cfg_final = {
         "empresa": {
             "nombre":       empresa_data.get("nombre") or empresa_data.get("archivo", "").replace(".xlsx","").replace("_"," ").title() or "Mi Empresa",
             "rut":          empresa_data.get("rut", ""),
@@ -264,6 +834,10 @@ def generar_json(empresa_data: dict, hojas_clasificadas: dict, hojas_meta: dict)
         },
         "hojas": hojas_json,
     }
+    # 1d) sinónimos a nivel raíz si se detectaron
+    if sinonimos_globales:
+        cfg_final["sinonimos_modelo"] = sinonimos_globales
+    return cfg_final
 
 
 # ── Rutas Flask ──────────────────────────────────────────────────────────────
@@ -1658,7 +2232,10 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
     import uvicorn
-from jobs.sentry_config import init_sentry, capturar_error
+    try:
+        from jobs.sentry_config import init_sentry, capturar_error
+    except Exception:
+        pass
     print(f"""
 ╔══════════════════════════════════════════════════════╗
 ║       KraftDo Classifier — UI de Clasificación      ║
