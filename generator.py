@@ -2604,6 +2604,175 @@ def gen_recalcular_command(modelos_observers: list[str]) -> str:
     )
 
 
+def gen_verificar_integridad(empresa: str, cfg: dict) -> str:
+    """v25-fase5: emite verificar_integridad.py en la raíz del proyecto
+    Laravel generado. Compara Excel vs MySQL: filas por hoja + SUM de
+    columnas numéricas clave. Exit 0 si todo OK, 1 si hay discrepancias.
+    """
+    base_repo = os.path.dirname(os.path.abspath(__file__))
+    excel_path = os.path.join(base_repo, cfg.get("fuente", {}).get("archivo", ""))
+    cfg_path   = os.path.join(base_repo, "empresas", f"{empresa}.json")
+
+    return (
+        '#!/usr/bin/env python3\n'
+        '"""verificar_integridad.py — auto-generado v25-fase5.\n'
+        'Cross-check Excel ↔ MySQL para detectar filas perdidas o sumas\n'
+        'desalineadas tras importar. Exit code 1 si hay discrepancias."""\n'
+        'import json, os, sys, re\n'
+        'try:\n'
+        '    import openpyxl\n'
+        'except ImportError as e:\n'
+        '    print(f"⚠️  Faltan dependencias: {e}. Salteando integridad.")\n'
+        '    sys.exit(0)\n'
+        '_DB = None\n'
+        'try:\n'
+        '    import mysql.connector as _mc\n'
+        '    _DB = "mysql.connector"\n'
+        'except ImportError:\n'
+        '    try:\n'
+        '        import pymysql as _mc\n'
+        '        _DB = "pymysql"\n'
+        '    except ImportError:\n'
+        '        print("⚠️  Sin driver MySQL (mysql-connector / pymysql). Salteo.")\n'
+        '        sys.exit(0)\n\n'
+        f'EMPRESA   = {empresa!r}\n'
+        f'CFG_PATH  = {cfg_path!r}\n'
+        f'EXCEL     = {excel_path!r}\n\n'
+        'def _load_env(path):\n'
+        '    env = {}\n'
+        '    if not os.path.isfile(path):\n'
+        '        return env\n'
+        '    for line in open(path, encoding="utf-8"):\n'
+        '        line = line.strip()\n'
+        '        if "=" in line and not line.startswith("#"):\n'
+        '            k, v = line.split("=", 1)\n'
+        '            env[k.strip()] = v.strip().strip(\'"\').strip("\'")\n'
+        '    return env\n\n'
+        'def _col_idx(letra):\n'
+        '    n = 0\n'
+        '    for c in str(letra).upper():\n'
+        '        n = n * 26 + (ord(c) - 64)\n'
+        '    return n\n\n'
+        'def _aplanar(cols):\n'
+        '    out = {}\n'
+        '    for k, v in (cols or {}).items():\n'
+        '        if isinstance(v, dict):\n'
+        '            l = v.get("columna")\n'
+        '            if l: out[k] = l\n'
+        '        else:\n'
+        '            out[k] = v\n'
+        '    return out\n\n'
+        'def _to_float(v):\n'
+        '    if v is None: return None\n'
+        '    if isinstance(v, (int, float)): return float(v)\n'
+        '    s = str(v).strip().replace("$","").replace(".","").replace(",",".")\n'
+        '    s = re.sub(r"[^0-9.\\-]", "", s)\n'
+        '    try: return float(s) if s else None\n'
+        '    except: return None\n\n'
+        'CAMPOS_NUMERICOS = (\n'
+        '    "precio","total","cantidad","monto","neto","importe","valor",\n'
+        '    "costo","saldo","unidades","cobrado","sueldo_base","a_pagar",\n'
+        '    "iva","stock","disponible","stock_disponible","total_neto",\n'
+        ')\n\n'
+        'def _es_numerico(c):\n'
+        '    return any(p in c.lower() for p in CAMPOS_NUMERICOS)\n\n'
+        'def main():\n'
+        '    base = os.path.dirname(os.path.abspath(__file__))\n'
+        '    env  = _load_env(os.path.join(base, ".env"))\n'
+        '    if not os.path.isfile(EXCEL):\n'
+        '        print(f"⚠️  Excel no existe en {EXCEL}; salteo integridad.")\n'
+        '        return 0\n'
+        '    if not os.path.isfile(CFG_PATH):\n'
+        '        print(f"⚠️  JSON no existe; salteo integridad.")\n'
+        '        return 0\n\n'
+        '    cfg = json.load(open(CFG_PATH, encoding="utf-8"))\n'
+        '    wb  = openpyxl.load_workbook(EXCEL, data_only=True)\n'
+        '    try:\n'
+        '        conn = _mc.connect(\n'
+        '            host=env.get("DB_HOST","127.0.0.1"),\n'
+        '            port=int(env.get("DB_PORT","3307")),\n'
+        '            user=env.get("DB_USERNAME","kraftdo"),\n'
+        '            password=env.get("DB_PASSWORD",""),\n'
+        '            database=env.get("DB_DATABASE", EMPRESA),\n'
+        '        )\n'
+        '    except Exception as e:\n'
+        '        print(f"⚠️  No se pudo conectar a MySQL: {e}; salteo integridad.")\n'
+        '        return 0\n\n'
+        '    n_ok = 0; n_fail = 0\n'
+        '    for alias, hoja in (cfg.get("hojas") or {}).items():\n'
+        '        tipo = hoja.get("tipo")\n'
+        '        if tipo not in ("catalogo", "registros", "agregado"):\n'
+        '            continue\n'
+        '        nombre_hoja = hoja.get("nombre")\n'
+        '        if nombre_hoja not in wb.sheetnames:\n'
+        '            print(f"⚠️  {alias}: hoja {nombre_hoja!r} no en Excel.")\n'
+        '            continue\n'
+        '        ws = wb[nombre_hoja]\n'
+        '        cols = _aplanar(hoja.get("columnas", {}))\n'
+        '        ident = hoja.get("identificador") or (list(cols.keys())[0] if cols else None)\n'
+        '        fila_ini = hoja.get("fila_datos", 5)\n\n'
+        '        # Filas Excel con identificador no vacío\n'
+        '        n_excel = 0\n'
+        '        if ident and ident in cols:\n'
+        '            idx = _col_idx(cols[ident])\n'
+        '            for r in range(fila_ini, (ws.max_row or fila_ini) + 1):\n'
+        '                v = ws.cell(r, idx).value\n'
+        '                if v is None: continue\n'
+        '                s = str(v).strip()\n'
+        '                if not s: continue\n'
+        '                if s.upper() in ("TOTAL","TOTALES","SUBTOTAL"): continue\n'
+        '                if "=" in s or len(s) > 50: continue\n'
+        '                n_excel += 1\n'
+        '        else:\n'
+        '            for r in range(fila_ini, (ws.max_row or fila_ini) + 1):\n'
+        '                row_vals = [ws.cell(r,_col_idx(l)).value for l in cols.values()]\n'
+        '                if any(v is not None and str(v).strip() for v in row_vals):\n'
+        '                    n_excel += 1\n\n'
+        '        # Filas BD\n'
+        '        tabla = alias.lower().replace("-", "_")\n'
+        '        cur = conn.cursor()\n'
+        '        try:\n'
+        '            cur.execute(f"SELECT COUNT(*) FROM `{tabla}`")\n'
+        '            n_db = cur.fetchone()[0]\n'
+        '        except Exception as e:\n'
+        '            print(f"⚠️  {alias}: no existe la tabla `{tabla}` ({e}). Skip.")\n'
+        '            cur.close(); continue\n\n'
+        '        if n_excel == n_db:\n'
+        '            print(f"  ✅ {alias}: {n_db}/{n_excel} filas")\n'
+        '            n_ok += 1\n'
+        '        else:\n'
+        '            diff = abs(n_excel - n_db)\n'
+        '            print(f"  ❌ {alias}: Excel={n_excel} BD={n_db} ({diff} diferencia)")\n'
+        '            n_fail += 1\n\n'
+        '        # SUMs por campo numérico clave presente\n'
+        '        for campo, letra in cols.items():\n'
+        '            if not _es_numerico(campo): continue\n'
+        '            try:\n'
+        '                cur.execute(f"SELECT COALESCE(SUM(`{campo}`),0) FROM `{tabla}`")\n'
+        '                sum_db = float(cur.fetchone()[0] or 0)\n'
+        '            except Exception:\n'
+        '                continue\n'
+        '            idx = _col_idx(letra)\n'
+        '            sum_xls = 0.0\n'
+        '            for r in range(fila_ini, (ws.max_row or fila_ini) + 1):\n'
+        '                f = _to_float(ws.cell(r, idx).value)\n'
+        '                if f is not None: sum_xls += f\n'
+        '            tol = max(1.0, abs(sum_xls) * 0.01)\n'
+        '            if abs(sum_xls - sum_db) <= tol:\n'
+        '                print(f"     ✓ {campo}: SUM={sum_db:,.0f}")\n'
+        '                n_ok += 1\n'
+        '            else:\n'
+        '                print(f"     ✗ {campo}: SUM Excel={sum_xls:,.0f} BD={sum_db:,.0f}")\n'
+        '                n_fail += 1\n'
+        '        cur.close()\n\n'
+        '    conn.close()\n'
+        '    print(f"\\n📊 RESULTADO: {n_ok} checks OK | {n_fail} discrepancias")\n'
+        '    return 1 if n_fail > 0 else 0\n\n'
+        'if __name__ == "__main__":\n'
+        '    sys.exit(main())\n'
+    )
+
+
 def gen_sync_command(empresa: str) -> str:
     """v25-fase4: php artisan kraftdo:sync {empresa} — invoca el importer
     Python sobre el .xlsx que el panel acaba de subir a sync_temp/."""
@@ -3061,6 +3230,10 @@ def generar(empresa: str = None, output_dir: str = "./laravel_output", preview: 
     archivos["app/Console/Commands/SyncDesdeExcel.php"] = gen_sync_command(empresa)
     print("  🔄 app/Console/Commands/SyncDesdeExcel.php (kraftdo:sync)")
 
+    # 4a-quater. Script verificar_integridad.py en la raíz (v25-fase5)
+    archivos["verificar_integridad.py"] = gen_verificar_integridad(empresa, cfg)
+    print("  🧪 verificar_integridad.py")
+
     # 4b. Tablas auxiliares para hojas tipo "matriz_asistencia"
     matriz_cfg = next(
         (h for h in hojas.values() if h.get("tipo") == "matriz_asistencia"),
@@ -3175,6 +3348,18 @@ def generar(empresa: str = None, output_dir: str = "./laravel_output", preview: 
                 print(line)
         else:
             print(f"  ⚠️  {r.stderr[:200]}")
+
+        # Verificar integridad Excel ↔ BD (v25-fase5). Advierte sin bloquear.
+        verif_path = os.path.join(output_dir, "verificar_integridad.py")
+        if os.path.exists(verif_path):
+            print("\n🧪 Verificando integridad Excel ↔ BD...")
+            r = subprocess.run(
+                ["python3", "verificar_integridad.py"],
+                cwd=output_dir, capture_output=True, text=True
+            )
+            sys.stdout.write(r.stdout)
+            if r.returncode != 0:
+                print(f"  ⚠️  Discrepancias detectadas (no bloqueante).")
 
         # Puerto único por empresa basado en hash del nombre
         import hashlib

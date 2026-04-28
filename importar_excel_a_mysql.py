@@ -505,6 +505,17 @@ def importar(empresa: str, laravel_dir: str):
     conn.close()
     print("\n✅ Importación completada")
 
+    # v25-fase5: si el proyecto generado tiene verificar_integridad.py,
+    # correrlo y mostrar el resumen.
+    verif = os.path.join(laravel_dir, "verificar_integridad.py")
+    if os.path.isfile(verif):
+        import subprocess as _sp
+        print("\n🧪 Verificando integridad Excel ↔ BD...")
+        r = _sp.run(["python3", verif], cwd=laravel_dir, capture_output=True, text=True)
+        sys.stdout.write(r.stdout)
+        if r.returncode != 0:
+            print("  ⚠️  Hay discrepancias (no bloqueante).")
+
 if __name__ == "__main__":
     empresa = sys.argv[1] if len(sys.argv) > 1 else "kraftdo_bd"
     laravel_dir = sys.argv[2] if len(sys.argv) > 2 else "/tmp/kraftdo_laravel_real"
